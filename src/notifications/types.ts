@@ -131,11 +131,24 @@ export type BrowserPushSubscriptionInput = {
 
 export type BrowserPushSubscriptionRecord = {
   id: string;
+  source?: string | null;
   browser_installation_id?: string | null;
+  endpoint?: string | null;
   endpoint_hash?: string | null;
+  expiration_time?: string | null;
+  p256dh?: string | null;
+  auth?: string | null;
+  user_id?: string | null;
+  user_email?: string | null;
+  user_phone?: string | null;
+  organization_id?: string | PlatformOrganization | null;
+  app_id?: string | PlatformApp | null;
   status?: string | null;
   permission?: "granted" | "denied" | "default" | "unsupported" | null;
+  capabilities_json?: JsonRecord | null;
   fallback_channels_json?: BrowserNotificationFallbackChannel[] | null;
+  user_agent?: string | null;
+  metadata_json?: JsonRecord | null;
   last_seen_at?: string | null;
   date_created?: string | null;
   date_updated?: string | null;

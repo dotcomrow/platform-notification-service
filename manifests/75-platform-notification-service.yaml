@@ -91,6 +91,10 @@ spec:
                 capabilities = ["create", "read", "update"]
               }
 
+              path "secret/data/platform-notification/browser-push/vapid" {
+                capabilities = ["read"]
+              }
+
               path "secret/data/keycloak-client-id-graphql-api" {
                 capabilities = ["read"]
               }
@@ -244,6 +248,10 @@ spec:
               value: "secret/data/platform-notification-service"
             - name: INTERNAL_TOKEN_VAULT_KEY
               value: "token"
+            - name: BROWSER_PUSH_VAPID_VAULT_PATH
+              value: "secret/data/platform-notification/browser-push/vapid"
+            - name: BROWSER_PUSH_VAPID_PUBLIC_KEY_VAULT_KEY
+              value: "public_key"
             - name: DIRECTUS_BASE_URL
               value: "http://directus-service.directus.svc.cluster.local:8055"
             - name: VAULT_ADDR

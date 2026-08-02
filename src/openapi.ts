@@ -144,6 +144,15 @@ export const openApiSpec = {
           fallback_channels: { type: "array", items: { type: "string" } }
         }
       },
+      BrowserPushPublicKeyResponse: {
+        type: "object",
+        required: ["ok", "public_key"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          public_key: { type: "string" }
+        }
+      },
       ErrorResponse: {
         type: "object",
         properties: {
@@ -236,6 +245,31 @@ export const openApiSpec = {
               }
             }
           }
+        }
+      }
+    },
+    "/internal/browser-push/public-key": {
+      post: {
+        operationId: "getBrowserPushPublicKey",
+        summary: "Read the VAPID public key used for browser Web Push subscriptions.",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: { type: "object", additionalProperties: true }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push VAPID public key.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushPublicKeyResponse" }
+              }
+            }
+          },
+          "503": { description: "Browser push VAPID public key is not configured." }
         }
       }
     },

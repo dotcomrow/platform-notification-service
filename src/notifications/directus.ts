@@ -191,6 +191,40 @@ export async function getNotificationRequest(id: string): Promise<NotificationRe
   return response.data;
 }
 
+export async function getBrowserPushSubscription(id: string): Promise<BrowserPushSubscriptionRecord> {
+  const fields = [
+    "id",
+    "source",
+    "browser_installation_id",
+    "endpoint",
+    "endpoint_hash",
+    "expiration_time",
+    "p256dh",
+    "auth",
+    "user_id",
+    "user_email",
+    "user_phone",
+    "organization_id",
+    "app_id",
+    "permission",
+    "capabilities_json",
+    "fallback_channels_json",
+    "user_agent",
+    "metadata_json",
+    "status",
+    "last_seen_at",
+    "date_created",
+    "date_updated"
+  ].join(",");
+  const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(id)}${queryString({ fields })}`
+  );
+  if (!response.data?.id) {
+    throw Object.assign(new Error(`Browser push subscription ${id} was not found.`), { status: 404 });
+  }
+  return response.data;
+}
+
 export async function updateNotificationRequest(id: string, patch: JsonRecord): Promise<void> {
   await directusJson<DirectusItemResponse<NotificationRequestRecord>>(
     `/items/${encodeURIComponent(config.notificationRequestCollection)}/${encodeURIComponent(id)}`,

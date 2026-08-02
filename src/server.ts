@@ -8,12 +8,14 @@ import { enforceInternalAuth } from "./auth/internal-auth.js";
 import { directusHealth } from "./lib/directus.js";
 import { kafkaReady, publishJson } from "./lib/kafka.js";
 import { asRecord, redactJsonRecord, truncate } from "./lib/json.js";
+import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
   createDeliveryAttempt,
   createNotificationRequest,
   enrichNotificationRequest,
   findRequestByIdempotencyKey,
+  getBrowserPushSubscription,
   getNotificationRequest,
   markRequestQueueFailed,
   markRequestQueued,
@@ -71,6 +73,8 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
     actor_user_id: input.actor_user_id || null,
     template_key: input.template_key || null,
     locale: input.locale || null,
+    subject: input.subject || null,
+    body: input.body || null,
     channels: input.channels,
     recipients: input.recipients,
     data: redactJsonRecord(input.data),
@@ -93,6 +97,17 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
   }
 
   res.status(202).json(notificationQueuedPayload(requestRecord.id, false, "queued", input.correlation_id));
+}
+
+async function resolveBrowserPushPublicKey(): Promise<string> {
+  if (config.browserPushVapidPublicKey.trim()) {
+    return config.browserPushVapidPublicKey.trim();
+  }
+  const publicKey = await vaultValue(config.browserPushVapidVaultPath, config.browserPushVapidPublicKeyVaultKey);
+  if (!publicKey) {
+    throw Object.assign(new Error("Browser push VAPID public key is not configured."), { status: 503 });
+  }
+  return publicKey;
 }
 
 app.get("/healthz", (_req, res) => {
@@ -138,6 +153,27 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
       permission: subscription.permission || input.permission,
       fallback_channels: subscription.fallback_channels_json || input.fallback_channels
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-push/public-key", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const publicKey = await resolveBrowserPushPublicKey();
+    res.status(200).json({ ok: true, public_key: publicKey });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/internal/browser-subscriptions/:id", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    // Intentionally omitted from OpenAPI so gateway/action generation does not publish subscription material.
+    const subscription = await getBrowserPushSubscription(req.params.id);
+    res.status(200).json({ ok: true, browser_subscription: subscription });
   } catch (error) {
     next(error);
   }
