@@ -1,0 +1,358 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-notification-service
+  namespace: directus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platform-notification-secret-bootstrap
+  namespace: directus
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platform-notification-secret-bootstrap
+  namespace: directus
+subjects:
+  - kind: ServiceAccount
+    name: directus
+    namespace: directus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platform-notification-secret-bootstrap
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: platform-notification-secret-bootstrap
+  namespace: directus
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: Force=true
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      annotations:
+        linkerd.io/inject: "disabled"
+    spec:
+      serviceAccountName: directus
+      restartPolicy: Never
+      volumes:
+        - name: vault-root-token
+          secret:
+            secretName: vault-root-token
+      containers:
+        - name: bootstrap
+          image: alpine/k8s:1.31.4
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: vault-root-token
+              mountPath: /vault-token
+              readOnly: true
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              apk add --no-cache curl jq openssl >/dev/null
+
+              VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
+              VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
+              SECRET_PATH="secret/data/platform-notification-service"
+
+              graphql_client_code="$(curl -sS -o /tmp/graphql-api-client-id.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/secret/data/keycloak-client-id-graphql-api" || true)"
+              if [ "${graphql_client_code}" != "200" ]; then
+                echo "Failed to read GraphQL API client id from Vault (HTTP ${graphql_client_code})."
+                cat /tmp/graphql-api-client-id.json || true
+                exit 1
+              fi
+              graphql_api_client_id="$(jq -r '.data.data.value // empty' /tmp/graphql-api-client-id.json)"
+              if [ -z "${graphql_api_client_id}" ] || [ "${graphql_api_client_id}" = "null" ]; then
+                echo "GraphQL API client id was empty in Vault."
+                exit 1
+              fi
+
+              cat >/tmp/platform-notification-service-policy.hcl <<EOF
+              path "secret/data/platform-notification-service" {
+                capabilities = ["create", "read", "update"]
+              }
+
+              path "secret/data/platform-notification-service/*" {
+                capabilities = ["create", "read", "update"]
+              }
+
+              path "secret/data/keycloak-client-id-graphql-api" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/${graphql_api_client_id}" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/kafka-nifi-username" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/kafka-nifi-password" {
+                capabilities = ["read"]
+              }
+              EOF
+
+              policy_payload="$(jq -Rs '{policy:.}' /tmp/platform-notification-service-policy.hcl)"
+              policy_code="$(curl -sS -o /tmp/policy-write.json -w '%{http_code}' \
+                -X PUT \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${policy_payload}" \
+                "${VAULT_ADDR}/v1/sys/policies/acl/platform-notification-service" || true)"
+              if [ "${policy_code}" != "200" ] && [ "${policy_code}" != "204" ]; then
+                echo "Failed to write platform-notification-service Vault policy (HTTP ${policy_code})."
+                cat /tmp/policy-write.json || true
+                exit 1
+              fi
+
+              role_payload="$(jq -nc '{
+                bound_service_account_names:["platform-notification-service"],
+                bound_service_account_namespaces:["directus"],
+                token_policies:["platform-notification-service"],
+                token_ttl:"24h"
+              }')"
+              role_code="$(curl -sS -o /tmp/role-write.json -w '%{http_code}' \
+                -X POST \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${role_payload}" \
+                "${VAULT_ADDR}/v1/auth/kubernetes/role/platform-notification-service" || true)"
+              if [ "${role_code}" != "200" ] && [ "${role_code}" != "204" ]; then
+                echo "Failed to write platform-notification-service Vault Kubernetes auth role (HTTP ${role_code})."
+                cat /tmp/role-write.json || true
+                exit 1
+              fi
+
+              code="$(curl -sS -o /tmp/service-secret.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/${SECRET_PATH}" || true)"
+              if [ "${code}" = "200" ]; then
+                service_token="$(jq -r '.data.data.token // empty' /tmp/service-secret.json)"
+                existing_secret_data="$(jq -c '.data.data // {}' /tmp/service-secret.json)"
+              else
+                service_token=""
+                existing_secret_data="{}"
+              fi
+
+              if [ -z "${service_token}" ] || [ "${service_token}" = "null" ]; then
+                service_token="$(openssl rand -base64 48 | tr -d '\n' | tr '/+' '._')"
+                payload="$(jq -nc --arg token "${service_token}" --argjson existing "${existing_secret_data}" '{data:($existing + {token:$token})}')"
+                write_code="$(curl -sS -o /tmp/service-secret-write.json -w '%{http_code}' \
+                  -X POST \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "${payload}" \
+                  "${VAULT_ADDR}/v1/${SECRET_PATH}" || true)"
+                if [ "${write_code}" != "200" ] && [ "${write_code}" != "204" ]; then
+                  echo "Failed to write ${SECRET_PATH} to Vault (HTTP ${write_code})."
+                  cat /tmp/service-secret-write.json || true
+                  exit 1
+                fi
+              fi
+
+              echo "Platform notification service Vault configuration is ready."
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-config-platform-notification-service
+  namespace: directus
+data:
+  vault-agent.hcl: |
+    pid_file = "/vault/agent.pid"
+    exit_after_auth = false
+
+    vault {
+      address = "http://vault.vault.svc.cluster.local:8200"
+    }
+
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role = "platform-notification-service"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/vault-secrets/vault-token"
+          mode = 0644
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-notification-service
+  namespace: directus
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    reloader.stakater.com/auto: "true"
+  labels:
+    app: platform-notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-notification-service
+  template:
+    metadata:
+      annotations:
+        reloader.stakater.com/auto: "true"
+      labels:
+        app: platform-notification-service
+    spec:
+      serviceAccountName: platform-notification-service
+      containers:
+        - name: vault-agent
+          image: hashicorp/vault:1.15.4
+          command: ["vault", "agent", "-config=/vault-config/vault-agent.hcl"]
+          volumeMounts:
+            - name: vault-agent-config
+              mountPath: /vault-config
+            - name: vault-secrets
+              mountPath: /vault-secrets
+        - name: platform-notification-service
+          image: "ghcr.io/dotcomrow/platform-notification-service:latest"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: AUTH_REQUIRED
+              value: "true"
+            - name: INTERNAL_TOKEN_VAULT_PATH
+              value: "secret/data/platform-notification-service"
+            - name: INTERNAL_TOKEN_VAULT_KEY
+              value: "token"
+            - name: DIRECTUS_BASE_URL
+              value: "http://directus-service.directus.svc.cluster.local:8055"
+            - name: VAULT_ADDR
+              value: "http://vault.vault.svc.cluster.local:8200"
+            - name: VAULT_TOKEN_FILE
+              value: "/vault-secrets/vault-token"
+            - name: KAFKA_BROKERS
+              value: "kafka.kafka.svc.internal.lan:9092"
+            - name: KAFKA_SASL_MECHANISM
+              value: "scram-sha-256"
+            - name: KAFKA_USERNAME_VAULT_PATH
+              value: "secret/data/kafka-nifi-username"
+            - name: KAFKA_USERNAME_VAULT_KEY
+              value: "value"
+            - name: KAFKA_PASSWORD_VAULT_PATH
+              value: "secret/data/kafka-nifi-password"
+            - name: KAFKA_PASSWORD_VAULT_KEY
+              value: "value"
+            - name: NOTIFICATION_REQUESTED_TOPIC
+              value: "platform.notifications.requested.v1"
+            - name: NOTIFICATION_BROWSER_SUBSCRIPTION_COLLECTION
+              value: "platform_notification_browser_subscriptions"
+            - name: OPENAPI_SERVER_URL
+              value: "http://platform-notification-service.directus.svc.cluster.local:8080"
+            - name: REQUEST_TIMEOUT_MS
+              value: "15000"
+            - name: RATE_MAX
+              value: "120"
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - name: vault-secrets
+              mountPath: /vault-secrets
+      volumes:
+        - name: vault-agent-config
+          configMap:
+            name: vault-agent-config-platform-notification-service
+        - name: vault-secrets
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-notification-service
+  namespace: directus
+  annotations:
+    gravitee.io/expose: "true"
+    gravitee.io/context-path: "/platform-notification"
+    gravitee.io/auth-required: "directus-token"
+    gravitee.io/approval-required: "admin"
+    gravitee.io/token-exchange-target: "<path:secret/data/keycloak-client-id-graphql-api#value>"
+    gravitee.io/description: "Internal platform notification intake API"
+    gravitee.io/version: "latest"
+    gravitee.io/tags: "directus,cms,hasura,platform,notifications,kafka"
+    gravitee.io/definition-name: "platform-notification-api"
+    gravitee.io/definition-summary: "Platform notification API"
+    gravitee.io/definition-description: "Accepts validated notification requests and browser push subscriptions for Kafka/NiFi communication flows."
+    gravitee.io/definition-type: "HTTP"
+    gravitee.io/definition-visibility: "PUBLIC"
+    gravitee.io/definition-state: "STARTED"
+    gravitee.io/definition-lifecycle-state: "PUBLISHED"
+    gravitee.io/definition-openapi-url: "http://platform-notification-service.directus.svc.cluster.local:8080/openapi.json"
+    gravitee.io/definition-context-path: "/platform-notification"
+    gravitee.io/definition-version: "latest"
+    gravitee.io/definition-listener-host: "platform-notification-service.directus.svc.cluster.local"
+    gravitee.io/definition-listener-port: "8080"
+    gravitee.io/definition-groups: "cms"
+    gravitee.io/definition-tags: "directus,cms,hasura,platform,notifications,kafka"
+    gravitee.io/definition-labels: "internal,cms,hasura,platform,notifications"
+    gravitee.io/definition-categories: "infra"
+    gravitee.io/definition-path-mappings: "/platform-notification/*"
+    gravitee.io/definition-metadata: '{"owner":"infra","service":"platform-notification","slack":"#infra"}'
+    gravitee.io/definition-properties: '{"tier":"prod","region":"us-central1","token_exchange_url":"http://directus-auth-bridge.directus.svc.cluster.local:8080/token","token_exchange_client_id":"<path:secret/data/keycloak-client-id-graphql-api#value>","token_exchange_client_secret":"<path:secret/data/keycloak-client-secret-graphql-api#value>"}'
+    gravitee.io/definition-endpoint-groups: '[{"name":"default","type":"http-proxy","sharedConfiguration":{"http":{"version":"HTTP_1_1","connectTimeout":30000,"readTimeout":120000,"idleTimeout":120000,"keepAlive":true,"keepAliveTimeout":30000,"pipelining":false,"useCompression":false,"propagateClientAcceptEncoding":false,"followRedirects":false,"maxConcurrentConnections":5}},"services":{"healthCheck":{"enabled":true,"overrideConfiguration":true,"type":"http-health-check","configuration":{"schedule":"*/30 * * * * *","target":"/healthz","method":"GET","overrideEndpointPath":true,"headers":[],"assertion":"{#response.status == 200}","successThreshold":2,"failureThreshold":2}}},"endpoints":[{"name":"platform-notification-http","type":"http-proxy","inheritConfiguration":true,"weight":1,"configuration":{"target":"http://platform-notification-service.directus.svc.cluster.local:8080"},"secondary":false}]}]'
+    gravitee.io/definition-pages: '{"swagger":{"type":"SWAGGER","name":"openapi","published":true,"visibility":"PUBLIC","homepage":false,"source":{"type":"http-fetcher","configuration":{"url":"http://platform-notification-service.directus.svc.cluster.local:8080/openapi.json","autoFetch":true,"fetchCron":"0 */5 * * * *","useSystemProxy":false}}}}'
+    gravitee.io/definition-resources: '[]'
+    gravitee.io/definition-plans: '{"open-access":{"name":"Open access","description":"Platform notification API access is enforced by GraphQL/Gravitee auth","security":{"type":"KEY_LESS"},"status":"PUBLISHED","validation":"AUTO","type":"API","selectionRule":"true"}}'
+    gravitee.io/definition-flows: '[]'
+    gravitee.io/definition-response-templates: '{}'
+    gravitee.io/definition-analytics: '{"enabled":true,"logging":{"condition":"true","content":{"headers":true,"payload":false,"messageHeaders":false,"messageMetadata":false,"messagePayload":false},"mode":{"entrypoint":true,"endpoint":true},"phase":{"request":true,"response":true}}}'
+    gravitee.io/definition-entrypoints: '[]'
+  labels:
+    app: platform-notification-service
+spec:
+  selector:
+    app: platform-notification-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
