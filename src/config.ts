@@ -11,7 +11,7 @@ const envSchema = z.object({
   DIRECTUS_BASE_URL: z.string().default("http://directus-service.directus.svc.cluster.local:8055"),
   DIRECTUS_HEALTH_PATH: z.string().default("/server/health"),
   DIRECTUS_STATIC_TOKEN: z.string().default(""),
-  DIRECTUS_TOKEN_VAULT_PATH: z.string().default("secret/data/directus/gravitee/clients/<path:secret/data/keycloak-client-id-graphql-api#value>"),
+  DIRECTUS_TOKEN_VAULT_PATH: z.string().default("secret/data/directus/platform-notification-service"),
   DIRECTUS_TOKEN_VAULT_KEY: z.string().default("token"),
   INTERNAL_TOKEN: z.string().default(""),
   INTERNAL_TOKEN_VAULT_PATH: z.string().default("secret/data/platform-notification-service"),
