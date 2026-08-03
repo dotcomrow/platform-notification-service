@@ -26,6 +26,12 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function isEndpointHashUniqueError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes("endpoint_hash")
+    && error.message.includes("has to be unique");
+}
+
 export async function getPlatformOrganization(organizationId: string): Promise<PlatformOrganization | null> {
   const fields = "id,organization_key,name,status,default_domain,default_keycloak_realm";
   const response = await directusJson<DirectusItemResponse<PlatformOrganization>>(
@@ -322,6 +328,20 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
   return response.data?.[0] ?? null;
 }
 
+async function patchBrowserSubscription(
+  id: string,
+  payload: Record<string, unknown>
+): Promise<BrowserPushSubscriptionRecord | null> {
+  const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: payload
+    }
+  );
+  return response.data?.id ? response.data : null;
+}
+
 async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
   params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated");
@@ -349,14 +369,9 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
     }
 
     const existing = await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
-    const payload = {
+    const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
-      endpoint: null,
-      endpoint_hash: null,
-      expiration_time: null,
-      p256dh: null,
-      auth: null,
       user_id: input.user_id || null,
       user_email: input.user_email || null,
       user_phone: input.user_phone || null,
@@ -367,19 +382,27 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
       fallback_channels_json: input.fallback_channels,
       user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
       metadata_json: {},
-      status: input.permission === "granted" && input.supported ? "missing_subscription" : "fallback",
       last_seen_at: now
     };
+    const preserveActiveEndpoint = Boolean(existing?.endpoint_hash) && input.permission === "granted" && input.supported;
+    const payload = preserveActiveEndpoint
+      ? {
+          ...commonPayload,
+          status: "active"
+        }
+      : {
+          ...commonPayload,
+          endpoint: null,
+          endpoint_hash: null,
+          expiration_time: null,
+          p256dh: null,
+          auth: null,
+          status: input.permission === "granted" && input.supported ? "missing_subscription" : "fallback"
+        };
 
     if (existing?.id) {
-      const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
-        `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(existing.id)}`,
-        {
-          method: "PATCH",
-          body: payload
-        }
-      );
-      return response.data?.id ? response.data : { ...existing, ...payload };
+      const patched = await patchBrowserSubscription(existing.id, payload);
+      return patched ?? { ...existing, ...payload };
     }
 
     const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
@@ -426,29 +449,34 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
   };
 
   if (existing?.id) {
-    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
-      `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(existing.id)}`,
-      {
-        method: "PATCH",
-        body: payload
-      }
-    );
-    return response.data?.id ? response.data : { ...existing, ...payload };
+    const patched = await patchBrowserSubscription(existing.id, payload);
+    return patched ?? { ...existing, ...payload };
   }
 
-  const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
-    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}`,
-    {
-      method: "POST",
-      body: {
-        id: randomUUID(),
-        ...payload,
-        date_created: now
+  try {
+    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+      `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}`,
+      {
+        method: "POST",
+        body: {
+          id: randomUUID(),
+          ...payload,
+          date_created: now
+        }
+      }
+    );
+    if (!response.data?.id) {
+      throw new Error("Directus did not return a browser push subscription id.");
+    }
+    return response.data;
+  } catch (error) {
+    if (isEndpointHashUniqueError(error)) {
+      const raced = await findBrowserSubscriptionByEndpointHash(endpointHash);
+      if (raced?.id) {
+        const patched = await patchBrowserSubscription(raced.id, payload);
+        return patched ?? { ...raced, ...payload };
       }
     }
-  );
-  if (!response.data?.id) {
-    throw new Error("Directus did not return a browser push subscription id.");
+    throw error;
   }
-  return response.data;
 }
