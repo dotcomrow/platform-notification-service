@@ -153,3 +153,27 @@ export type BrowserPushSubscriptionRecord = {
   date_created?: string | null;
   date_updated?: string | null;
 };
+
+export type BrowserPushSubscriptionLifecycleStatus =
+  | "active"
+  | "disabled"
+  | "expired"
+  | "fallback"
+  | "inactive"
+  | "missing_subscription"
+  | "stale"
+  | "superseded";
+
+export type BrowserPushSubscriptionLifecyclePatchInput = {
+  status: BrowserPushSubscriptionLifecycleStatus;
+  reason?: string;
+  message?: string;
+  provider_status_code?: number;
+  metadata?: JsonRecord;
+};
+
+export type BrowserPushSubscriptionCleanupInput = {
+  stale_days?: number;
+  limit?: number;
+  dry_run?: boolean;
+};

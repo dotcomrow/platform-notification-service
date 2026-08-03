@@ -11,6 +11,7 @@ import { asRecord, redactJsonRecord, truncate } from "./lib/json.js";
 import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
+  cleanupBrowserPushSubscriptions,
   createDeliveryAttempt,
   createNotificationRequest,
   enrichNotificationRequest,
@@ -19,10 +20,13 @@ import {
   getNotificationRequest,
   markRequestQueueFailed,
   markRequestQueued,
+  patchBrowserPushSubscriptionLifecycle,
   patchNotificationStatus,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
 import {
+  parseBrowserSubscriptionCleanup,
+  parseBrowserSubscriptionLifecyclePatch,
   parseBrowserSubscription,
   parseDeliveryAttempt,
   parseNotificationRequest,
@@ -110,6 +114,43 @@ async function resolveBrowserPushPublicKey(): Promise<string> {
   return publicKey;
 }
 
+let browserSubscriptionCleanupRunning = false;
+
+async function runBrowserSubscriptionCleanup(trigger: string): Promise<void> {
+  if (browserSubscriptionCleanupRunning) {
+    console.warn(`[platform-notification-service] browser subscription cleanup skipped; previous run is still active trigger=${trigger}`);
+    return;
+  }
+  browserSubscriptionCleanupRunning = true;
+  try {
+    const summary = await cleanupBrowserPushSubscriptions({
+      stale_days: config.browserSubscriptionStaleDays,
+      limit: config.browserSubscriptionCleanupLimit
+    });
+    console.log(`[platform-notification-service] browser subscription cleanup trigger=${trigger} expired=${summary.expired} stale=${summary.stale} superseded=${summary.superseded} stale_days=${summary.stale_days} limit=${summary.limit}`);
+  } catch (error) {
+    console.error(`[platform-notification-service] browser subscription cleanup failed trigger=${trigger}: ${error instanceof Error ? truncate(error.message, 1000) : "unknown error"}`);
+  } finally {
+    browserSubscriptionCleanupRunning = false;
+  }
+}
+
+function scheduleBrowserSubscriptionCleanup(): void {
+  if (!config.browserSubscriptionCleanupEnabled) {
+    console.log("[platform-notification-service] browser subscription cleanup is disabled.");
+    return;
+  }
+
+  const startupTimer = setTimeout(() => {
+    void runBrowserSubscriptionCleanup("startup");
+  }, config.browserSubscriptionCleanupStartupDelayMs);
+  const intervalTimer = setInterval(() => {
+    void runBrowserSubscriptionCleanup("interval");
+  }, config.browserSubscriptionCleanupIntervalMs);
+  startupTimer.unref?.();
+  intervalTimer.unref?.();
+}
+
 app.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "platform-notification-service", version: "1.0.0" });
 });
@@ -163,6 +204,32 @@ app.post("/internal/browser-push/public-key", async (req, res, next) => {
     await enforceInternalAuth(req);
     const publicKey = await resolveBrowserPushPublicKey();
     res.status(200).json({ ok: true, public_key: publicKey });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/lifecycle/cleanup", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionCleanup(req.body);
+    const summary = await cleanupBrowserPushSubscriptions(input);
+    res.status(200).json({ ok: true, ...summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/:id/lifecycle", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionLifecyclePatch(req.body);
+    const subscription = await patchBrowserPushSubscriptionLifecycle(req.params.id, input);
+    res.status(200).json({
+      ok: true,
+      browser_subscription_id: subscription.id,
+      status: subscription.status
+    });
   } catch (error) {
     next(error);
   }
@@ -243,4 +310,5 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(config.port, () => {
   console.log(`[platform-notification-service] listening on :${config.port} topic=${config.notificationRequestedTopic}`);
+  scheduleBrowserSubscriptionCleanup();
 });

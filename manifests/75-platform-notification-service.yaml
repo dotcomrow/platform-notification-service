@@ -246,6 +246,16 @@ spec:
               value: "secret/data/platform-notification/browser-push/vapid"
             - name: BROWSER_PUSH_VAPID_PUBLIC_KEY_VAULT_KEY
               value: "public_key"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_ENABLED
+              value: "true"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_INTERVAL_MS
+              value: "21600000"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_STARTUP_DELAY_MS
+              value: "30000"
+            - name: BROWSER_SUBSCRIPTION_STALE_DAYS
+              value: "90"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_LIMIT
+              value: "500"
             - name: DIRECTUS_BASE_URL
               value: "http://directus-service.directus.svc.cluster.local:8055"
             - name: DIRECTUS_TOKEN_VAULT_PATH

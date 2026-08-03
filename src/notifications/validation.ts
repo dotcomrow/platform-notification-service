@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { asRecord, JsonRecord } from "../lib/json.js";
-import { BrowserPushSubscriptionInput, NotificationDeliveryAttemptInput, NotificationRequestInput } from "./types.js";
+import {
+  BrowserPushSubscriptionCleanupInput,
+  BrowserPushSubscriptionInput,
+  BrowserPushSubscriptionLifecyclePatchInput,
+  NotificationDeliveryAttemptInput,
+  NotificationRequestInput
+} from "./types.js";
 
 const channelSchema = z.enum(["in_app", "browser_push", "mobile_push", "email", "sms", "voice", "webhook"]);
 const severitySchema = z.enum(["debug", "info", "success", "warning", "error", "critical"]).default("info");
@@ -115,6 +121,20 @@ const browserPushSubscriptionSchema = z.object({
   }
 });
 
+const browserPushSubscriptionLifecyclePatchSchema = z.object({
+  status: z.enum(["active", "disabled", "expired", "fallback", "inactive", "missing_subscription", "stale", "superseded"]),
+  reason: z.string().trim().min(1).optional(),
+  message: z.string().trim().min(1).optional(),
+  provider_status_code: z.number().int().min(100).max(599).optional(),
+  metadata: jsonRecordSchema.optional()
+});
+
+const browserPushSubscriptionCleanupSchema = z.object({
+  stale_days: z.number().int().min(1).max(3650).optional(),
+  limit: z.number().int().min(1).max(5000).optional(),
+  dry_run: z.boolean().optional()
+});
+
 function unwrapInput(body: unknown): JsonRecord {
   let current = asRecord(body) ?? {};
   for (let depth = 0; depth < 4; depth += 1) {
@@ -147,4 +167,12 @@ export function parseDeliveryAttempt(body: unknown): NotificationDeliveryAttempt
 
 export function parseBrowserSubscription(body: unknown): BrowserPushSubscriptionInput {
   return browserPushSubscriptionSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionInput;
+}
+
+export function parseBrowserSubscriptionLifecyclePatch(body: unknown): BrowserPushSubscriptionLifecyclePatchInput {
+  return browserPushSubscriptionLifecyclePatchSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionLifecyclePatchInput;
+}
+
+export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubscriptionCleanupInput {
+  return browserPushSubscriptionCleanupSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionCleanupInput;
 }

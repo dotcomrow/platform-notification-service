@@ -8,7 +8,9 @@ import {
   NotificationRequestInput,
   NotificationRequestRecord,
   NotificationStatus,
+  BrowserPushSubscriptionCleanupInput,
   BrowserPushSubscriptionInput,
+  BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionRecord,
   PlatformApp,
   PlatformOrganization
@@ -342,6 +344,33 @@ async function patchBrowserSubscription(
   return response.data?.id ? response.data : null;
 }
 
+function browserSubscriptionLifecyclePayload(
+  input: BrowserPushSubscriptionLifecyclePatchInput,
+  now = new Date().toISOString()
+): Record<string, unknown> {
+  return {
+    status: input.status,
+    metadata_json: redactJsonRecord({
+      ...(input.metadata ?? {}),
+      lifecycle_reason: input.reason || input.status,
+      lifecycle_message: input.message || undefined,
+      lifecycle_provider_status_code: input.provider_status_code ?? undefined,
+      lifecycle_updated_at: now
+    })
+  };
+}
+
+export async function patchBrowserPushSubscriptionLifecycle(
+  id: string,
+  input: BrowserPushSubscriptionLifecyclePatchInput
+): Promise<BrowserPushSubscriptionRecord> {
+  const patched = await patchBrowserSubscription(id, browserSubscriptionLifecyclePayload(input));
+  if (!patched?.id) {
+    throw new Error("Directus did not return a browser subscription lifecycle record.");
+  }
+  return patched;
+}
+
 async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
   params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated");
@@ -479,4 +508,138 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
     }
     throw error;
   }
+}
+
+type BrowserSubscriptionCleanupSummary = {
+  expired: number;
+  stale: number;
+  superseded: number;
+  dry_run: boolean;
+  stale_days: number;
+  limit: number;
+};
+
+async function listExpiredBrowserSubscriptions(now: string, limit: number): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash");
+  params.set("filter[status][_eq]", "active");
+  params.set("filter[expiration_time][_lte]", now);
+  params.set("sort", "expiration_time,last_seen_at,date_created");
+  params.set("limit", String(limit));
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+async function listStaleBrowserSubscriptions(cutoff: string, limit: number): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash");
+  params.set("filter[status][_eq]", "active");
+  params.set("filter[last_seen_at][_lte]", cutoff);
+  params.set("sort", "last_seen_at,date_created");
+  params.set("limit", String(limit));
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+async function listActiveBrowserSubscriptionsForDedupe(limit: number): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated");
+  params.set("filter[status][_eq]", "active");
+  params.set("sort", "browser_installation_id,-last_seen_at,-date_updated,-date_created");
+  params.set("limit", String(limit));
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+function newerBrowserSubscription(left: BrowserPushSubscriptionRecord, right: BrowserPushSubscriptionRecord): BrowserPushSubscriptionRecord {
+  const leftTime = Date.parse(left.last_seen_at || left.date_updated || left.date_created || "");
+  const rightTime = Date.parse(right.last_seen_at || right.date_updated || right.date_created || "");
+  return (Number.isFinite(leftTime) ? leftTime : 0) >= (Number.isFinite(rightTime) ? rightTime : 0)
+    ? left
+    : right;
+}
+
+function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]): BrowserPushSubscriptionRecord[] {
+  const latestByInstallation = new Map<string, BrowserPushSubscriptionRecord>();
+  for (const record of records) {
+    const installationId = asString(record.browser_installation_id);
+    if (!installationId || !record.id) {
+      continue;
+    }
+    const existing = latestByInstallation.get(installationId);
+    latestByInstallation.set(installationId, existing ? newerBrowserSubscription(existing, record) : record);
+  }
+
+  return records.filter((record) => {
+    const installationId = asString(record.browser_installation_id);
+    const latest = installationId ? latestByInstallation.get(installationId) : null;
+    return Boolean(latest?.id && record.id && latest.id !== record.id);
+  });
+}
+
+async function markLifecycleRows(
+  records: BrowserPushSubscriptionRecord[],
+  input: BrowserPushSubscriptionLifecyclePatchInput,
+  dryRun: boolean
+): Promise<number> {
+  if (dryRun) {
+    return records.length;
+  }
+  let count = 0;
+  for (const record of records) {
+    if (!record.id) {
+      continue;
+    }
+    await patchBrowserPushSubscriptionLifecycle(record.id, input);
+    count += 1;
+  }
+  return count;
+}
+
+export async function cleanupBrowserPushSubscriptions(input: BrowserPushSubscriptionCleanupInput = {}): Promise<BrowserSubscriptionCleanupSummary> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const staleDays = Math.max(1, Math.floor(input.stale_days ?? config.browserSubscriptionStaleDays));
+  const limit = Math.max(1, Math.min(5000, Math.floor(input.limit ?? config.browserSubscriptionCleanupLimit)));
+  const dryRun = input.dry_run === true;
+  const cutoff = new Date(now.getTime() - staleDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const expiredRecords = await listExpiredBrowserSubscriptions(nowIso, limit);
+  const expiredIds = new Set(expiredRecords.map((record) => record.id));
+  const expired = await markLifecycleRows(expiredRecords, {
+    status: "expired",
+    reason: "expiration_time_elapsed",
+    message: `Browser push subscription expiration_time is before ${nowIso}`
+  }, dryRun);
+
+  const staleRecords = (await listStaleBrowserSubscriptions(cutoff, limit))
+    .filter((record) => !expiredIds.has(record.id));
+  const stale = await markLifecycleRows(staleRecords, {
+    status: "stale",
+    reason: "last_seen_at_stale",
+    message: `Browser push subscription last_seen_at is older than ${staleDays} days`
+  }, dryRun);
+
+  const dedupeRecords = supersededBrowserSubscriptions(await listActiveBrowserSubscriptionsForDedupe(limit))
+    .filter((record) => !expiredIds.has(record.id));
+  const superseded = await markLifecycleRows(dedupeRecords, {
+    status: "superseded",
+    reason: "browser_installation_id_duplicate",
+    message: "A newer active browser push subscription exists for the same browser installation."
+  }, dryRun);
+
+  return {
+    expired,
+    stale,
+    superseded,
+    dry_run: dryRun,
+    stale_days: staleDays,
+    limit
+  };
 }
