@@ -322,17 +322,81 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
   return response.data?.[0] ?? null;
 }
 
+async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated");
+  params.set("filter[browser_installation_id][_eq]", browserInstallationId);
+  params.set("sort", "-last_seen_at,-date_updated,-date_created");
+  params.set("limit", "1");
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data?.[0] ?? null;
+}
+
 export async function upsertBrowserPushSubscription(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   const now = new Date().toISOString();
   const subscription = input.subscription;
   if (!subscription?.endpoint) {
-    return {
-      id: "",
-      browser_installation_id: input.browser_installation_id || null,
-      status: input.permission === "granted" && input.supported ? "missing_subscription" : "fallback",
+    if (!input.browser_installation_id) {
+      return {
+        id: "",
+        browser_installation_id: null,
+        status: input.permission === "granted" && input.supported ? "missing_subscription" : "fallback",
+        permission: input.permission,
+        fallback_channels_json: input.fallback_channels
+      };
+    }
+
+    const existing = await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
+    const payload = {
+      source: input.source,
+      browser_installation_id: input.browser_installation_id,
+      endpoint: null,
+      endpoint_hash: null,
+      expiration_time: null,
+      p256dh: null,
+      auth: null,
+      user_id: input.user_id || null,
+      user_email: input.user_email || null,
+      user_phone: input.user_phone || null,
+      organization_id: input.organization_id || null,
+      app_id: input.app_id || null,
       permission: input.permission,
-      fallback_channels_json: input.fallback_channels
+      capabilities_json: redactJsonRecord(input.capabilities),
+      fallback_channels_json: input.fallback_channels,
+      user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
+      metadata_json: {},
+      status: input.permission === "granted" && input.supported ? "missing_subscription" : "fallback",
+      last_seen_at: now
     };
+
+    if (existing?.id) {
+      const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+        `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(existing.id)}`,
+        {
+          method: "PATCH",
+          body: payload
+        }
+      );
+      return response.data?.id ? response.data : { ...existing, ...payload };
+    }
+
+    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+      `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}`,
+      {
+        method: "POST",
+        body: {
+          id: randomUUID(),
+          ...payload,
+          date_created: now
+        }
+      }
+    );
+    if (!response.data?.id) {
+      throw new Error("Directus did not return a browser capability record id.");
+    }
+    return response.data;
   }
 
   const endpointHash = sha256(subscription.endpoint);

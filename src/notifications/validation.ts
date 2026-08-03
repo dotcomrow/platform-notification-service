@@ -96,7 +96,18 @@ const browserPushSubscriptionSchema = z.object({
   fallback_channels: z.array(z.enum(["email", "sms"])).default(["email", "sms"]),
   subscription: pushSubscriptionSchema.optional()
 }).superRefine((value, ctx) => {
-  if (value.supported && value.permission === "granted" && !value.subscription) {
+  const capabilityFallbackRequired = value.capabilities.fallback_required === true;
+  const capabilityRegistrationStatus = typeof value.capabilities.registration_status === "string"
+    ? value.capabilities.registration_status
+    : "";
+  const isFallbackCapabilityReport =
+    capabilityFallbackRequired || capabilityRegistrationStatus === "failed";
+  if (
+    value.supported &&
+    value.permission === "granted" &&
+    !value.subscription &&
+    !isFallbackCapabilityReport
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "subscription is required when browser push is supported and permission is granted"
