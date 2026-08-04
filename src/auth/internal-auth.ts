@@ -21,26 +21,53 @@ function allowsBrowserPushTrustedTokens(req: Request): boolean {
     || req.path === "/internal/browser-subscriptions";
 }
 
-async function browserPushTrustedTokens(): Promise<string[]> {
+function allowsNotificationIntakeTrustedTokens(req: Request): boolean {
+  return req.method.toUpperCase() === "POST" && req.path === "/internal/notifications";
+}
+
+async function trustedVaultClientTokens(
+  clientKeys: string[],
+  vaultPrefix: string,
+  vaultKey: string,
+  logLabel: string
+): Promise<string[]> {
   const tokens = new Set<string>();
-  for (const clientKey of config.browserPushTrustedDirectusClientKeys) {
+  for (const clientKey of clientKeys) {
     if (!CLIENT_KEY_PATTERN.test(clientKey)) {
-      console.warn(`[platform-notification-service] ignoring invalid browser-push trusted Directus client key '${truncate(clientKey, 120)}'`);
+      console.warn(`[platform-notification-service] ignoring invalid ${logLabel} client key '${truncate(clientKey, 120)}'`);
       continue;
     }
     try {
       const token = await optionalVaultValue(
-        `${config.browserPushTrustedDirectusClientTokenVaultPrefix}/${clientKey}`,
-        config.browserPushTrustedDirectusClientTokenVaultKey
+        `${vaultPrefix}/${clientKey}`,
+        vaultKey
       );
       if (token) {
         tokens.add(token);
       }
     } catch (error) {
-      console.warn(`[platform-notification-service] browser-push trusted Directus client token unavailable for ${clientKey}: ${error instanceof Error ? truncate(error.message, 500) : "unknown error"}`);
+      console.warn(`[platform-notification-service] ${logLabel} client token unavailable for ${clientKey}: ${error instanceof Error ? truncate(error.message, 500) : "unknown error"}`);
     }
   }
   return [...tokens];
+}
+
+async function browserPushTrustedTokens(): Promise<string[]> {
+  return trustedVaultClientTokens(
+    config.browserPushTrustedDirectusClientKeys,
+    config.browserPushTrustedDirectusClientTokenVaultPrefix,
+    config.browserPushTrustedDirectusClientTokenVaultKey,
+    "browser-push trusted Directus"
+  );
+}
+
+async function notificationIntakeTrustedTokens(): Promise<string[]> {
+  return trustedVaultClientTokens(
+    config.notificationIntakeTrustedClientKeys,
+    config.notificationIntakeTrustedClientTokenVaultPrefix,
+    config.notificationIntakeTrustedClientTokenVaultKey,
+    "notification-intake trusted"
+  );
 }
 
 async function acceptedTokens(req: Request): Promise<string[]> {
@@ -59,6 +86,11 @@ async function acceptedTokens(req: Request): Promise<string[]> {
   }
   if (allowsBrowserPushTrustedTokens(req)) {
     for (const token of await browserPushTrustedTokens()) {
+      tokens.add(token);
+    }
+  }
+  if (allowsNotificationIntakeTrustedTokens(req)) {
+    for (const token of await notificationIntakeTrustedTokens()) {
       tokens.add(token);
     }
   }

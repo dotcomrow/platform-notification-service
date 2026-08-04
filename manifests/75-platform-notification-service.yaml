@@ -67,6 +67,7 @@ spec:
               VAULT_ADDR="http://vault.vault.svc.cluster.local:8200"
               VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
               SECRET_PATH="secret/data/platform-notification-service"
+              DEPLOY_SERVICE_CLIENT_PATH="secret/data/platform-notification-service/clients/platform-deploy-service"
 
               cat >/tmp/platform-notification-service-policy.hcl <<EOF
               path "secret/data/platform-notification-service" {
@@ -160,6 +161,33 @@ spec:
                 if [ "${write_code}" != "200" ] && [ "${write_code}" != "204" ]; then
                   echo "Failed to write ${SECRET_PATH} to Vault (HTTP ${write_code})."
                   cat /tmp/service-secret-write.json || true
+                  exit 1
+                fi
+              fi
+
+              deploy_client_code="$(curl -sS -o /tmp/platform-deploy-client-secret.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/${DEPLOY_SERVICE_CLIENT_PATH}" || true)"
+              if [ "${deploy_client_code}" = "200" ]; then
+                deploy_client_token="$(jq -r '.data.data.token // empty' /tmp/platform-deploy-client-secret.json)"
+                existing_deploy_client_data="$(jq -c '.data.data // {}' /tmp/platform-deploy-client-secret.json)"
+              else
+                deploy_client_token=""
+                existing_deploy_client_data="{}"
+              fi
+
+              if [ -z "${deploy_client_token}" ] || [ "${deploy_client_token}" = "null" ]; then
+                deploy_client_token="$(openssl rand -base64 48 | tr -d '\n' | tr '/+' '._')"
+                deploy_client_payload="$(jq -nc --arg token "${deploy_client_token}" --argjson existing "${existing_deploy_client_data}" '{data:($existing + {token:$token})}')"
+                deploy_client_write_code="$(curl -sS -o /tmp/platform-deploy-client-secret-write.json -w '%{http_code}' \
+                  -X POST \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "${deploy_client_payload}" \
+                  "${VAULT_ADDR}/v1/${DEPLOY_SERVICE_CLIENT_PATH}" || true)"
+                if [ "${deploy_client_write_code}" != "200" ] && [ "${deploy_client_write_code}" != "204" ]; then
+                  echo "Failed to write ${DEPLOY_SERVICE_CLIENT_PATH} to Vault (HTTP ${deploy_client_write_code})."
+                  cat /tmp/platform-deploy-client-secret-write.json || true
                   exit 1
                 fi
               fi
@@ -267,6 +295,12 @@ spec:
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
+              value: "token"
+            - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS
+              value: "platform-deploy-service"
+            - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_PREFIX
+              value: "secret/data/platform-notification-service/clients"
+            - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: VAULT_ADDR
               value: "http://vault.vault.svc.cluster.local:8200"
