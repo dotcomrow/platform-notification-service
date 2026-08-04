@@ -68,6 +68,21 @@ spec:
               VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
               SECRET_PATH="secret/data/platform-notification-service"
               DEPLOY_SERVICE_CLIENT_PATH="secret/data/platform-notification-service/clients/platform-deploy-service"
+              GRAPHQL_API_CLIENT_ID_PATH="secret/data/keycloak-client-id-graphql-api"
+
+              graphql_client_code="$(curl -sS -o /tmp/graphql-api-client-id.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/${GRAPHQL_API_CLIENT_ID_PATH}" || true)"
+              if [ "${graphql_client_code}" != "200" ]; then
+                echo "Failed to read GraphQL API client id from Vault (HTTP ${graphql_client_code})."
+                cat /tmp/graphql-api-client-id.json || true
+                exit 1
+              fi
+              graphql_api_client_id="$(jq -r '.data.data.value // empty' /tmp/graphql-api-client-id.json)"
+              if [ -z "${graphql_api_client_id}" ] || [ "${graphql_api_client_id}" = "null" ]; then
+                echo "GraphQL API client id was empty in Vault."
+                exit 1
+              fi
 
               cat >/tmp/platform-notification-service-policy.hcl <<EOF
               path "secret/data/platform-notification-service" {
@@ -86,6 +101,10 @@ spec:
                 capabilities = ["read"]
               }
 
+              path "secret/data/keycloak-client-id-graphql-api" {
+                capabilities = ["read"]
+              }
+
               path "secret/data/directus/gravitee/clients/cms-site-internal" {
                 capabilities = ["read"]
               }
@@ -95,6 +114,10 @@ spec:
               }
 
               path "secret/data/directus/gravitee/clients/graphql-api" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/${graphql_api_client_id}" {
                 capabilities = ["read"]
               }
 
@@ -291,7 +314,7 @@ spec:
             - name: DIRECTUS_TOKEN_VAULT_KEY
               value: "token"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_KEYS
-              value: "cms-site-internal,cms-site-external,graphql-api"
+              value: "cms-site-internal,cms-site-external,graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
@@ -303,7 +326,7 @@ spec:
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_KEYS
-              value: "graphql-api"
+              value: "graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
