@@ -61,7 +61,7 @@ export const notificationStatusPatchSchema = z.object({
   status: statusSchema,
   message: z.string().trim().min(1).optional(),
   result_json: jsonRecordSchema.optional(),
-  error_message: z.string().trim().min(1).optional(),
+  error_message: z.string().trim().optional(),
   started_at: z.string().datetime({ offset: true }).optional(),
   finished_at: z.string().datetime({ offset: true }).optional()
 });
@@ -72,10 +72,10 @@ export const deliveryAttemptSchema = z.object({
   recipient_json: jsonRecordSchema,
   message_json: jsonRecordSchema.optional(),
   status: z.enum(["queued", "sending", "sent", "failed", "skipped"]),
-  provider_message_id: z.string().trim().min(1).optional(),
+  provider_message_id: z.string().trim().optional(),
   request_payload_json: jsonRecordSchema.optional(),
   response_json: jsonRecordSchema.optional(),
-  error_message: z.string().trim().min(1).optional()
+  error_message: z.string().trim().optional()
 });
 
 const pushSubscriptionSchema = z.object({
