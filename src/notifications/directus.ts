@@ -41,6 +41,47 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const browserSubscriptionUpsertLocks = new Map<string, Promise<BrowserPushSubscriptionRecord>>();
+
+async function withBrowserSubscriptionUpsertLock(
+  keys: string[],
+  run: () => Promise<BrowserPushSubscriptionRecord>
+): Promise<BrowserPushSubscriptionRecord> {
+  const lockKeys = Array.from(new Set(keys)).sort();
+  const existing = lockKeys
+    .map((key) => browserSubscriptionUpsertLocks.get(key))
+    .filter((promise): promise is Promise<BrowserPushSubscriptionRecord> => Boolean(promise));
+  if (existing.length > 0) {
+    await Promise.all(existing.map((promise) => promise.catch(() => undefined)));
+  }
+
+  const promise = run();
+  for (const key of lockKeys) {
+    browserSubscriptionUpsertLocks.set(key, promise);
+  }
+  try {
+    return await promise;
+  } finally {
+    for (const key of lockKeys) {
+      if (browserSubscriptionUpsertLocks.get(key) === promise) {
+        browserSubscriptionUpsertLocks.delete(key);
+      }
+    }
+  }
+}
+
+function browserSubscriptionUpsertLockKeys(input: BrowserPushSubscriptionInput): string[] {
+  const keys: string[] = [];
+  const endpoint = input.subscription?.endpoint;
+  if (input.browser_installation_id) {
+    keys.push(`installation:${input.browser_installation_id}`);
+  }
+  if (endpoint) {
+    keys.push(`endpoint:${sha256(endpoint)}`);
+  }
+  return keys.length ? keys : [`source:${input.source}`];
+}
+
 export async function getPlatformOrganization(organizationId: string): Promise<PlatformOrganization | null> {
   const fields = "id,organization_key,name,status,default_domain,default_keycloak_realm";
   const response = await directusJson<DirectusItemResponse<PlatformOrganization>>(
@@ -337,6 +378,40 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
   return response.data?.[0] ?? null;
 }
 
+function browserSubscriptionTime(record: BrowserPushSubscriptionRecord): number {
+  const parsed = Date.parse(record.last_seen_at || record.date_updated || record.date_created || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function browserSubscriptionRank(record: BrowserPushSubscriptionRecord): number {
+  if (record.status === "active" && record.endpoint_hash) {
+    return 4;
+  }
+  if (record.endpoint_hash) {
+    return 3;
+  }
+  if (record.status === "active") {
+    return 2;
+  }
+  return 1;
+}
+
+function preferredBrowserSubscriptionRecord(records: BrowserPushSubscriptionRecord[]): BrowserPushSubscriptionRecord | null {
+  let selected: BrowserPushSubscriptionRecord | null = null;
+  for (const record of records) {
+    if (!selected) {
+      selected = record;
+      continue;
+    }
+    const rank = browserSubscriptionRank(record);
+    const selectedRank = browserSubscriptionRank(selected);
+    if (rank > selectedRank || (rank === selectedRank && browserSubscriptionTime(record) > browserSubscriptionTime(selected))) {
+      selected = record;
+    }
+  }
+  return selected;
+}
+
 async function patchBrowserSubscription(
   id: string,
   payload: Record<string, unknown>
@@ -383,11 +458,11 @@ async function findBrowserSubscriptionByInstallationId(browserInstallationId: st
   params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated");
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
-  params.set("limit", "1");
+  params.set("limit", "25");
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
-  return response.data?.[0] ?? null;
+  return preferredBrowserSubscriptionRecord(response.data ?? []);
 }
 
 async function findBrowserSubscriptionAfterEndpointConflict(
@@ -407,7 +482,7 @@ async function findBrowserSubscriptionAfterEndpointConflict(
 
     if (browserInstallationId) {
       const byInstallation = await findBrowserSubscriptionByInstallationId(browserInstallationId);
-      if (byInstallation?.id) {
+      if (byInstallation?.id && byInstallation.endpoint_hash === endpointHash) {
         return byInstallation;
       }
     }
@@ -416,6 +491,13 @@ async function findBrowserSubscriptionAfterEndpointConflict(
 }
 
 export async function upsertBrowserPushSubscription(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
+  return withBrowserSubscriptionUpsertLock(
+    browserSubscriptionUpsertLockKeys(input),
+    () => upsertBrowserPushSubscriptionUnlocked(input)
+  );
+}
+
+async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   const now = new Date().toISOString();
   const subscription = input.subscription;
   if (!subscription?.endpoint) {
