@@ -265,6 +265,7 @@ spec:
   template:
     metadata:
       annotations:
+        notification.suncoast.systems/redeploy-reason: "internal-rate-limit-skip-20260804"
         reloader.stakater.com/auto: "true"
       labels:
         app: platform-notification-service
