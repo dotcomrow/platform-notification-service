@@ -61,6 +61,24 @@ function isNotificationRequestIdempotencyConflict(error: unknown): boolean {
     && (message.includes("unique") || message.includes("duplicate"));
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function findRequestByIdempotencyKeyWithRetry(source: string, idempotencyKey: string) {
+  const delays = [0, 100, 250, 500, 1000];
+  for (const delay of delays) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+    const existing = await findRequestByIdempotencyKey(source, idempotencyKey);
+    if (existing) {
+      return existing;
+    }
+  }
+  return null;
+}
+
 async function queueNotification(req: Request, res: Response): Promise<void> {
   await enforceInternalAuth(req);
   const parsedInput = parseNotificationRequest(req.body);
@@ -79,7 +97,7 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
     requestRecord = await createNotificationRequest(input, context);
   } catch (error) {
     if (input.idempotency_key && isNotificationRequestIdempotencyConflict(error)) {
-      const existing = await findRequestByIdempotencyKey(input.source, input.idempotency_key);
+      const existing = await findRequestByIdempotencyKeyWithRetry(input.source, input.idempotency_key);
       if (existing) {
         res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
         return;
