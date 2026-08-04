@@ -40,7 +40,7 @@ export function redactText(value: string): string {
 }
 
 export function redactJsonValue(value: unknown, key = ""): unknown {
-  if (/token|secret|password|credential|private[_-]?key/i.test(key)) {
+  if (/token|secret|password|credential|authorization|private[_-]?key/i.test(key) || /^(auth|endpoint)$/i.test(key)) {
     return "[redacted]";
   }
   if (typeof value === "string") {

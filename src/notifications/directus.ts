@@ -29,9 +29,16 @@ function sha256(value: string): string {
 }
 
 function isEndpointHashUniqueError(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes("endpoint_hash")
-    && error.message.includes("has to be unique");
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("endpoint_hash")
+    && (message.includes("unique") || message.includes("duplicate"));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function getPlatformOrganization(organizationId: string): Promise<PlatformOrganization | null> {
@@ -383,6 +390,31 @@ async function findBrowserSubscriptionByInstallationId(browserInstallationId: st
   return response.data?.[0] ?? null;
 }
 
+async function findBrowserSubscriptionAfterEndpointConflict(
+  endpointHash: string,
+  browserInstallationId?: string
+): Promise<BrowserPushSubscriptionRecord | null> {
+  const delays = [0, 100, 250, 500, 1000];
+  for (const delay of delays) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+
+    const byEndpoint = await findBrowserSubscriptionByEndpointHash(endpointHash);
+    if (byEndpoint?.id) {
+      return byEndpoint;
+    }
+
+    if (browserInstallationId) {
+      const byInstallation = await findBrowserSubscriptionByInstallationId(browserInstallationId);
+      if (byInstallation?.id) {
+        return byInstallation;
+      }
+    }
+  }
+  return null;
+}
+
 export async function upsertBrowserPushSubscription(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   const now = new Date().toISOString();
   const subscription = input.subscription;
@@ -500,7 +532,7 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
     return response.data;
   } catch (error) {
     if (isEndpointHashUniqueError(error)) {
-      const raced = await findBrowserSubscriptionByEndpointHash(endpointHash);
+      const raced = await findBrowserSubscriptionAfterEndpointConflict(endpointHash, input.browser_installation_id);
       if (raced?.id) {
         const patched = await patchBrowserSubscription(raced.id, payload);
         return patched ?? { ...raced, ...payload };
