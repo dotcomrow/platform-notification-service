@@ -5,6 +5,7 @@ import {
   BrowserPushSubscriptionCleanupInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
+  BrowserPushSubscriptionSearchInput,
   NotificationDeliveryAttemptInput,
   NotificationRequestInput
 } from "./types.js";
@@ -136,6 +137,15 @@ const browserPushSubscriptionCleanupSchema = z.object({
   dry_run: z.boolean().optional()
 });
 
+const browserPushSubscriptionSearchSchema = z.object({
+  query: z.string().trim().max(256).optional(),
+  field: z.enum(["all", "id", "user_id", "email", "name"]).default("all"),
+  organization_id: z.string().trim().min(1),
+  app_id: z.string().trim().min(1),
+  status: z.string().trim().min(1).default("active"),
+  limit: z.number().int().min(1).max(100).default(25)
+});
+
 function unwrapInput(body: unknown): JsonRecord {
   let current = asRecord(body) ?? {};
   for (let depth = 0; depth < 4; depth += 1) {
@@ -176,4 +186,8 @@ export function parseBrowserSubscriptionLifecyclePatch(body: unknown): BrowserPu
 
 export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubscriptionCleanupInput {
   return browserPushSubscriptionCleanupSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionCleanupInput;
+}
+
+export function parseBrowserSubscriptionSearch(body: unknown): BrowserPushSubscriptionSearchInput {
+  return browserPushSubscriptionSearchSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionSearchInput;
 }

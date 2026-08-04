@@ -145,6 +145,49 @@ export const openApiSpec = {
           metadata: { type: "object", additionalProperties: true }
         }
       },
+      BrowserPushSubscriptionSearchRequest: {
+        type: "object",
+        required: ["organization_id", "app_id"],
+        additionalProperties: true,
+        properties: {
+          query: { type: "string" },
+          field: { type: "string", enum: ["all", "id", "user_id", "email", "name"] },
+          organization_id: { type: "string" },
+          app_id: { type: "string" },
+          status: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 100 }
+        }
+      },
+      BrowserPushSubscriptionSearchResponse: {
+        type: "object",
+        required: ["ok", "browser_subscriptions", "count"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          count: { type: "integer" },
+          browser_subscriptions: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                id: { type: "string" },
+                browser_installation_id: { type: "string", nullable: true },
+                user_id: { type: "string", nullable: true },
+                user_email: { type: "string", nullable: true },
+                display_name: { type: "string", nullable: true },
+                organization_id: { type: "string", nullable: true },
+                app_id: { type: "string", nullable: true },
+                status: { type: "string", nullable: true },
+                permission: { type: "string", nullable: true },
+                last_seen_at: { type: "string", nullable: true },
+                date_created: { type: "string", nullable: true },
+                date_updated: { type: "string", nullable: true }
+              }
+            }
+          }
+        }
+      },
       BrowserPushSubscriptionResponse: {
         type: "object",
         required: ["ok", "browser_subscription_id", "status"],
@@ -280,6 +323,30 @@ export const openApiSpec = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/search": {
+      post: {
+        operationId: "searchBrowserSubscriptions",
+        summary: "Search active browser Web Push subscriptions for a selected platform app.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionSearchRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push subscriptions matching the scoped search.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushSubscriptionSearchResponse" }
               }
             }
           }

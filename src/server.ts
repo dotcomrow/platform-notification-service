@@ -22,11 +22,13 @@ import {
   markRequestQueued,
   patchBrowserPushSubscriptionLifecycle,
   patchNotificationStatus,
+  searchBrowserPushSubscriptions,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
 import {
   parseBrowserSubscriptionCleanup,
   parseBrowserSubscriptionLifecyclePatch,
+  parseBrowserSubscriptionSearch,
   parseBrowserSubscription,
   parseDeliveryAttempt,
   parseNotificationRequest,
@@ -265,6 +267,21 @@ app.post("/internal/browser-subscriptions/lifecycle/cleanup", async (req, res, n
     const input = parseBrowserSubscriptionCleanup(req.body);
     const summary = await cleanupBrowserPushSubscriptions(input);
     res.status(200).json({ ok: true, ...summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/search", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionSearch(req.body);
+    const subscriptions = await searchBrowserPushSubscriptions(input);
+    res.status(200).json({
+      ok: true,
+      browser_subscriptions: subscriptions,
+      count: subscriptions.length
+    });
   } catch (error) {
     next(error);
   }

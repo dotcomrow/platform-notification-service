@@ -130,6 +130,32 @@ export type BrowserPushSubscriptionInput = {
   };
 };
 
+export type BrowserPushSubscriptionSearchField = "all" | "id" | "user_id" | "email" | "name";
+
+export type BrowserPushSubscriptionSearchInput = {
+  query?: string;
+  field?: BrowserPushSubscriptionSearchField;
+  organization_id: string;
+  app_id: string;
+  status?: string;
+  limit?: number;
+};
+
+export type BrowserPushSubscriptionSearchResult = {
+  id: string;
+  browser_installation_id?: string | null;
+  user_id?: string | null;
+  user_email?: string | null;
+  display_name?: string | null;
+  organization_id?: string | null;
+  app_id?: string | null;
+  status?: string | null;
+  permission?: string | null;
+  last_seen_at?: string | null;
+  date_created?: string | null;
+  date_updated?: string | null;
+};
+
 export type BrowserPushSubscriptionRecord = {
   id: string;
   source?: string | null;
