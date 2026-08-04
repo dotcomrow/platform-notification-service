@@ -70,6 +70,15 @@ async function notificationIntakeTrustedTokens(): Promise<string[]> {
   );
 }
 
+async function notificationIntakeTrustedDirectusTokens(): Promise<string[]> {
+  return trustedVaultClientTokens(
+    config.notificationIntakeTrustedDirectusClientKeys,
+    config.notificationIntakeTrustedDirectusClientTokenVaultPrefix,
+    config.notificationIntakeTrustedDirectusClientTokenVaultKey,
+    "notification-intake trusted Directus"
+  );
+}
+
 async function acceptedTokens(req: Request): Promise<string[]> {
   const tokens = new Set<string>();
   const internalToken = await resolveInternalToken();
@@ -91,6 +100,9 @@ async function acceptedTokens(req: Request): Promise<string[]> {
   }
   if (allowsNotificationIntakeTrustedTokens(req)) {
     for (const token of await notificationIntakeTrustedTokens()) {
+      tokens.add(token);
+    }
+    for (const token of await notificationIntakeTrustedDirectusTokens()) {
       tokens.add(token);
     }
   }
