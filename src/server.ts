@@ -51,6 +51,16 @@ function notificationQueuedPayload(recordId: string, duplicate: boolean, status:
   };
 }
 
+function isNotificationRequestIdempotencyConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes(config.notificationRequestCollection.toLowerCase())
+    && message.includes("idempotency_key")
+    && (message.includes("unique") || message.includes("duplicate"));
+}
+
 async function queueNotification(req: Request, res: Response): Promise<void> {
   await enforceInternalAuth(req);
   const parsedInput = parseNotificationRequest(req.body);
@@ -64,7 +74,19 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
   }
 
   const { input, context } = await enrichNotificationRequest(parsedInput);
-  const requestRecord = await createNotificationRequest(input, context);
+  let requestRecord;
+  try {
+    requestRecord = await createNotificationRequest(input, context);
+  } catch (error) {
+    if (input.idempotency_key && isNotificationRequestIdempotencyConflict(error)) {
+      const existing = await findRequestByIdempotencyKey(input.source, input.idempotency_key);
+      if (existing) {
+        res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
+        return;
+      }
+    }
+    throw error;
+  }
   const eventPayload = {
     schema_version: 1,
     notification_request_id: requestRecord.id,
