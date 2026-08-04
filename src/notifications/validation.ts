@@ -99,6 +99,7 @@ const browserPushSubscriptionSchema = z.object({
   permission: z.enum(["granted", "denied", "default", "unsupported"]),
   supported: z.boolean(),
   capabilities: jsonRecordSchema,
+  metadata: jsonRecordSchema.optional(),
   fallback_channels: z.array(z.enum(["email", "sms"])).default(["email", "sms"]),
   subscription: pushSubscriptionSchema.optional()
 }).superRefine((value, ctx) => {

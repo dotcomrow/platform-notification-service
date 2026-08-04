@@ -524,7 +524,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       capabilities_json: redactJsonRecord(input.capabilities),
       fallback_channels_json: input.fallback_channels,
       user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
-      metadata_json: {},
+      metadata_json: redactJsonRecord(input.metadata ?? {}),
       last_seen_at: now
     };
     const preserveActiveEndpoint = Boolean(existing?.endpoint_hash) && input.permission === "granted" && input.supported;
@@ -586,7 +586,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     capabilities_json: redactJsonRecord(input.capabilities),
     fallback_channels_json: input.fallback_channels,
     user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
-    metadata_json: {},
+    metadata_json: redactJsonRecord(input.metadata ?? {}),
     status: input.permission === "granted" ? "active" : "disabled",
     last_seen_at: now
   };
@@ -635,7 +635,7 @@ type BrowserSubscriptionCleanupSummary = {
 
 async function listExpiredBrowserSubscriptions(now: string, limit: number): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash");
+  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set("filter[expiration_time][_lte]", now);
   params.set("sort", "expiration_time,last_seen_at,date_created");
@@ -648,7 +648,7 @@ async function listExpiredBrowserSubscriptions(now: string, limit: number): Prom
 
 async function listStaleBrowserSubscriptions(cutoff: string, limit: number): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash");
+  params.set("fields", "id,status,expiration_time,last_seen_at,browser_installation_id,endpoint_hash,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set("filter[last_seen_at][_lte]", cutoff);
   params.set("sort", "last_seen_at,date_created");
@@ -661,7 +661,7 @@ async function listStaleBrowserSubscriptions(cutoff: string, limit: number): Pro
 
 async function listActiveBrowserSubscriptionsForDedupe(limit: number): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated");
+  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set("sort", "browser_installation_id,-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(limit));
@@ -697,6 +697,16 @@ function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]
   });
 }
 
+function browserSubscriptionNotificationLink(record: BrowserPushSubscriptionRecord): JsonRecord | null {
+  const metadata = asRecord(record.metadata_json);
+  const capabilities = asRecord(record.capabilities_json);
+  return asRecord(metadata?.notification_link) ?? asRecord(capabilities?.notification_link);
+}
+
+function isPersistentBrowserSubscription(record: BrowserPushSubscriptionRecord): boolean {
+  return browserSubscriptionNotificationLink(record)?.persistent === true;
+}
+
 async function markLifecycleRows(
   records: BrowserPushSubscriptionRecord[],
   input: BrowserPushSubscriptionLifecyclePatchInput,
@@ -724,7 +734,8 @@ export async function cleanupBrowserPushSubscriptions(input: BrowserPushSubscrip
   const dryRun = input.dry_run === true;
   const cutoff = new Date(now.getTime() - staleDays * 24 * 60 * 60 * 1000).toISOString();
 
-  const expiredRecords = await listExpiredBrowserSubscriptions(nowIso, limit);
+  const expiredRecords = (await listExpiredBrowserSubscriptions(nowIso, limit))
+    .filter((record) => !isPersistentBrowserSubscription(record));
   const expiredIds = new Set(expiredRecords.map((record) => record.id));
   const expired = await markLifecycleRows(expiredRecords, {
     status: "expired",
@@ -733,7 +744,7 @@ export async function cleanupBrowserPushSubscriptions(input: BrowserPushSubscrip
   }, dryRun);
 
   const staleRecords = (await listStaleBrowserSubscriptions(cutoff, limit))
-    .filter((record) => !expiredIds.has(record.id));
+    .filter((record) => !expiredIds.has(record.id) && !isPersistentBrowserSubscription(record));
   const stale = await markLifecycleRows(staleRecords, {
     status: "stale",
     reason: "last_seen_at_stale",
@@ -741,7 +752,7 @@ export async function cleanupBrowserPushSubscriptions(input: BrowserPushSubscrip
   }, dryRun);
 
   const dedupeRecords = supersededBrowserSubscriptions(await listActiveBrowserSubscriptionsForDedupe(limit))
-    .filter((record) => !expiredIds.has(record.id));
+    .filter((record) => !expiredIds.has(record.id) && !isPersistentBrowserSubscription(record));
   const superseded = await markLifecycleRows(dedupeRecords, {
     status: "superseded",
     reason: "browser_installation_id_duplicate",

@@ -119,6 +119,7 @@ export type BrowserPushSubscriptionInput = {
   supported: boolean;
   fallback_channels: BrowserNotificationFallbackChannel[];
   capabilities: JsonRecord;
+  metadata?: JsonRecord;
   subscription?: {
     endpoint: string;
     expirationTime?: number | null;

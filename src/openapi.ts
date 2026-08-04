@@ -113,6 +113,7 @@ export const openApiSpec = {
           permission: { type: "string", enum: ["granted", "denied", "default", "unsupported"] },
           supported: { type: "boolean" },
           capabilities: { type: "object", additionalProperties: true },
+          metadata: { type: "object", additionalProperties: true },
           fallback_channels: { type: "array", items: { type: "string", enum: ["email", "sms"] } },
           subscription: {
             type: "object",
@@ -130,6 +131,18 @@ export const openApiSpec = {
               }
             }
           }
+        }
+      },
+      BrowserPushSubscriptionLifecycleRequest: {
+        type: "object",
+        required: ["status"],
+        additionalProperties: true,
+        properties: {
+          status: { type: "string", enum: ["active", "disabled", "expired", "fallback", "inactive", "missing_subscription", "stale", "superseded"] },
+          reason: { type: "string" },
+          message: { type: "string" },
+          provider_status_code: { type: "integer" },
+          metadata: { type: "object", additionalProperties: true }
         }
       },
       BrowserPushSubscriptionResponse: {
@@ -239,6 +252,31 @@ export const openApiSpec = {
         responses: {
           "200": {
             description: "Browser push subscription was stored.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/{id}/lifecycle": {
+      post: {
+        operationId: "patchBrowserSubscriptionLifecycle",
+        summary: "Update browser Web Push subscription lifecycle status.",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionLifecycleRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push subscription lifecycle was updated.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
