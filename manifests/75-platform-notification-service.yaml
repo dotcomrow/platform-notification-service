@@ -320,6 +320,12 @@ spec:
               value: "secret/data/directus/gravitee/clients"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
               value: "token"
+            - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_KEYS
+              value: "graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
+            - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
+              value: "secret/data/directus/gravitee/clients"
+            - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
+              value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS
               value: "platform-deploy-service"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_PREFIX

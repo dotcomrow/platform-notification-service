@@ -21,6 +21,10 @@ function allowsBrowserPushTrustedTokens(req: Request): boolean {
     || req.path === "/internal/browser-subscriptions";
 }
 
+function allowsBrowserSubscriptionSearchTrustedTokens(req: Request): boolean {
+  return req.method.toUpperCase() === "POST" && req.path === "/internal/browser-subscriptions/search";
+}
+
 function allowsNotificationIntakeTrustedTokens(req: Request): boolean {
   return req.method.toUpperCase() === "POST" && req.path === "/internal/notifications";
 }
@@ -61,6 +65,15 @@ async function browserPushTrustedTokens(): Promise<string[]> {
   );
 }
 
+async function browserSubscriptionSearchTrustedTokens(): Promise<string[]> {
+  return trustedVaultClientTokens(
+    config.browserSubscriptionSearchTrustedDirectusClientKeys,
+    config.browserSubscriptionSearchTrustedDirectusClientTokenVaultPrefix,
+    config.browserSubscriptionSearchTrustedDirectusClientTokenVaultKey,
+    "browser-subscription-search trusted Directus"
+  );
+}
+
 async function notificationIntakeTrustedTokens(): Promise<string[]> {
   return trustedVaultClientTokens(
     config.notificationIntakeTrustedClientKeys,
@@ -95,6 +108,11 @@ async function acceptedTokens(req: Request): Promise<string[]> {
   }
   if (allowsBrowserPushTrustedTokens(req)) {
     for (const token of await browserPushTrustedTokens()) {
+      tokens.add(token);
+    }
+  }
+  if (allowsBrowserSubscriptionSearchTrustedTokens(req)) {
+    for (const token of await browserSubscriptionSearchTrustedTokens()) {
       tokens.add(token);
     }
   }
