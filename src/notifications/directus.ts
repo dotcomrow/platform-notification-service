@@ -851,7 +851,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       metadata_json: browserSubscriptionMetadata(input, existing),
       last_seen_at: now
     };
-    const preserveActiveEndpoint = Boolean(existing?.endpoint_hash) && input.permission === "granted" && input.supported;
+    const preserveActiveEndpoint = Boolean(existing?.endpoint_hash) && !disabledByUser && input.permission === "granted" && input.supported;
     if (existing?.endpoint_hash && !preserveActiveEndpoint && !browserSubscriptionProofMatches(existing, input.browser_subscription_client_secret)) {
       throw Object.assign(new Error("Browser subscription ownership proof is required."), { status: 403 });
     }
