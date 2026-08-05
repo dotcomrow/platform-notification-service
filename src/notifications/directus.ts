@@ -888,7 +888,9 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
 
   if (existing?.id) {
     const patched = await patchBrowserSubscription(existing.id, payload);
-    return patched ?? { ...existing, ...payload };
+    const result = patched ?? { ...existing, ...payload };
+    await supersedeOtherActiveBrowserSubscriptions(result);
+    return result;
   }
 
   try {
@@ -906,6 +908,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     if (!response.data?.id) {
       throw new Error("Directus did not return a browser push subscription id.");
     }
+    await supersedeOtherActiveBrowserSubscriptions(response.data);
     return response.data;
   } catch (error) {
     if (isEndpointHashUniqueError(error)) {
@@ -913,7 +916,9 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       if (raced?.id) {
         assertBrowserSubscriptionCanUpdate(raced, input);
         const patched = await patchBrowserSubscription(raced.id, payload);
-        return patched ?? { ...raced, ...payload };
+        const result = patched ?? { ...raced, ...payload };
+        await supersedeOtherActiveBrowserSubscriptions(result);
+        return result;
       }
       throw Object.assign(
         new Error("Browser push subscription endpoint is already registered. Reset the browser push subscription and try again."),
@@ -969,6 +974,37 @@ async function listActiveBrowserSubscriptionsForDedupe(limit: number): Promise<B
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
   return response.data ?? [];
+}
+
+async function listActiveBrowserSubscriptionsForInstallation(
+  browserInstallationId: string,
+  limit = 100
+): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("filter[status][_eq]", "active");
+  params.set("filter[browser_installation_id][_eq]", browserInstallationId);
+  params.set("sort", "-last_seen_at,-date_updated,-date_created");
+  params.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+async function supersedeOtherActiveBrowserSubscriptions(current: BrowserPushSubscriptionRecord): Promise<void> {
+  const browserInstallationId = asString(current.browser_installation_id);
+  if (!current.id || !browserInstallationId) {
+    return;
+  }
+
+  const duplicates = (await listActiveBrowserSubscriptionsForInstallation(browserInstallationId))
+    .filter((record) => record.id && record.id !== current.id);
+  await markLifecycleRows(duplicates, {
+    status: "superseded",
+    reason: "browser_installation_id_replaced",
+    message: "A newer active browser push subscription replaced this browser installation endpoint."
+  }, false);
 }
 
 function newerBrowserSubscription(left: BrowserPushSubscriptionRecord, right: BrowserPushSubscriptionRecord): BrowserPushSubscriptionRecord {
@@ -1052,7 +1088,7 @@ export async function cleanupBrowserPushSubscriptions(input: BrowserPushSubscrip
   }, dryRun);
 
   const dedupeRecords = supersededBrowserSubscriptions(await listActiveBrowserSubscriptionsForDedupe(limit))
-    .filter((record) => !expiredIds.has(record.id) && !isPersistentBrowserSubscription(record));
+    .filter((record) => !expiredIds.has(record.id));
   const superseded = await markLifecycleRows(dedupeRecords, {
     status: "superseded",
     reason: "browser_installation_id_duplicate",
