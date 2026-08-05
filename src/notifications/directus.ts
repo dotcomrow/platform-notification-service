@@ -64,6 +64,21 @@ function assertBrowserSubscriptionCanUpdate(
   }
 }
 
+function assertBrowserSubscriptionMatchesInstallation(
+  record: BrowserPushSubscriptionRecord | null | undefined,
+  input: BrowserPushSubscriptionInput
+): void {
+  const recordInstallationId = asString(record?.browser_installation_id);
+  if (
+    record?.id &&
+    recordInstallationId &&
+    input.browser_installation_id &&
+    recordInstallationId !== input.browser_installation_id
+  ) {
+    throw Object.assign(new Error("Browser subscription ownership proof is required."), { status: 403 });
+  }
+}
+
 function browserSubscriptionMetadata(
   input: BrowserPushSubscriptionInput,
   existing?: BrowserPushSubscriptionRecord | null
@@ -579,6 +594,18 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
   return response.data?.[0] ?? null;
 }
 
+async function findBrowserSubscriptionById(id: string): Promise<BrowserPushSubscriptionRecord | null> {
+  const params = new URLSearchParams();
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("filter[id][_eq]", id);
+  params.set("limit", "1");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data?.[0] ?? null;
+}
+
 function browserSubscriptionTime(record: BrowserPushSubscriptionRecord): number {
   const parsed = Date.parse(record.last_seen_at || record.date_updated || record.date_created || "");
   return Number.isFinite(parsed) ? parsed : 0;
@@ -804,7 +831,11 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       };
     }
 
-    const existing = await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
+    const existingById = input.browser_subscription_id
+      ? await findBrowserSubscriptionById(input.browser_subscription_id)
+      : null;
+    assertBrowserSubscriptionMatchesInstallation(existingById, input);
+    const existing = existingById ?? await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
     assertBrowserSubscriptionCanUpdate(existing, input);
     const commonPayload = {
       source: input.source,
@@ -862,12 +893,17 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
   }
 
   const endpointHash = sha256(subscription.endpoint);
-  const byEndpoint = await findBrowserSubscriptionByEndpointHash(endpointHash);
+  const byId = input.browser_subscription_id
+    ? await findBrowserSubscriptionById(input.browser_subscription_id)
+    : null;
+  assertBrowserSubscriptionMatchesInstallation(byId, input);
+  assertBrowserSubscriptionCanUpdate(byId, input);
+  const byEndpoint = byId ? null : await findBrowserSubscriptionByEndpointHash(endpointHash);
   assertBrowserSubscriptionCanUpdate(byEndpoint, input);
-  const byInstallation = !byEndpoint && input.browser_installation_id
+  const byInstallation = !byId && !byEndpoint && input.browser_installation_id
     ? await findBrowserSubscriptionByInstallationId(input.browser_installation_id)
     : null;
-  const existing = byEndpoint ??
+  const existing = byId ?? byEndpoint ??
     (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
   const payload = {
     source: input.source,

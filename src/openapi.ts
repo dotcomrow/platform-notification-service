@@ -103,6 +103,7 @@ export const openApiSpec = {
         additionalProperties: true,
         properties: {
           source: { type: "string" },
+          browser_subscription_id: { type: "string" },
           browser_installation_id: { type: "string" },
           user_id: { type: "string" },
           user_email: { type: "string" },

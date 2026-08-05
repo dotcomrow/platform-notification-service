@@ -111,6 +111,7 @@ export type BrowserNotificationFallbackChannel = "email" | "sms";
 
 export type BrowserPushSubscriptionInput = {
   source: string;
+  browser_subscription_id?: string;
   browser_installation_id?: string;
   browser_subscription_client_secret?: string;
   user_id?: string;

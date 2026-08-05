@@ -90,6 +90,7 @@ const pushSubscriptionSchema = z.object({
 
 const browserPushSubscriptionSchema = z.object({
   source: z.string().trim().min(1).default("internal-application-mfe"),
+  browser_subscription_id: z.string().trim().min(1).optional(),
   browser_installation_id: z.string().trim().min(1).optional(),
   browser_subscription_client_secret: z.string().trim().min(32).max(512).optional(),
   user_id: z.string().trim().min(1).optional(),
