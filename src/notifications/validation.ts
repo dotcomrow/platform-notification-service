@@ -91,6 +91,7 @@ const pushSubscriptionSchema = z.object({
 const browserPushSubscriptionSchema = z.object({
   source: z.string().trim().min(1).default("internal-application-mfe"),
   browser_installation_id: z.string().trim().min(1).optional(),
+  browser_subscription_client_secret: z.string().trim().min(32).max(512).optional(),
   user_id: z.string().trim().min(1).optional(),
   user_email: z.string().trim().min(1).optional(),
   user_phone: z.string().trim().min(1).optional(),
@@ -108,8 +109,10 @@ const browserPushSubscriptionSchema = z.object({
   const capabilityRegistrationStatus = typeof value.capabilities.registration_status === "string"
     ? value.capabilities.registration_status
     : "";
+  const capabilityDisabledByUser =
+    value.capabilities.disabled_by_user === true || capabilityRegistrationStatus === "disabled";
   const isFallbackCapabilityReport =
-    capabilityFallbackRequired || capabilityRegistrationStatus === "failed";
+    capabilityFallbackRequired || capabilityRegistrationStatus === "failed" || capabilityDisabledByUser;
   if (
     value.supported &&
     value.permission === "granted" &&
