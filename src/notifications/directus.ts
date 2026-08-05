@@ -83,6 +83,33 @@ function browserSubscriptionMetadata(
   };
 }
 
+function hasOwnRecordField(record: BrowserPushSubscriptionRecord | null | undefined, field: keyof BrowserPushSubscriptionRecord): boolean {
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, field));
+}
+
+function browserSubscriptionRelationPayload(
+  input: BrowserPushSubscriptionInput,
+  existing?: BrowserPushSubscriptionRecord | null
+): Record<string, string | null> {
+  const payload: Record<string, string | null> = {};
+  const existingOrganizationId = idFromRelation(existing?.organization_id);
+  const existingAppId = idFromRelation(existing?.app_id);
+
+  if (input.organization_id) {
+    payload.organization_id = input.organization_id;
+  } else if (hasOwnRecordField(existing, "organization_id")) {
+    payload.organization_id = existingOrganizationId || null;
+  }
+
+  if (input.app_id) {
+    payload.app_id = input.app_id;
+  } else if (hasOwnRecordField(existing, "app_id")) {
+    payload.app_id = existingAppId || null;
+  }
+
+  return payload;
+}
+
 function isEndpointHashUniqueError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -537,7 +564,7 @@ export async function createDeliveryAttempt(
 
 async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
   params.set("filter[endpoint_hash][_eq]", endpointHash);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "1");
@@ -711,7 +738,7 @@ export async function searchBrowserPushSubscriptions(
 
 async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "25");
@@ -773,16 +800,13 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
 
     const existing = await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
     assertBrowserSubscriptionCanUpdate(existing, input);
-    const existingOrganizationId = idFromRelation(existing?.organization_id);
-    const existingAppId = idFromRelation(existing?.app_id);
     const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
       user_id: input.user_id || null,
       user_email: input.user_email || null,
       user_phone: input.user_phone || null,
-      organization_id: input.organization_id || existingOrganizationId || null,
-      app_id: input.app_id || existingAppId || null,
+      ...browserSubscriptionRelationPayload(input, existing),
       permission: input.permission,
       capabilities_json: redactJsonRecord(input.capabilities),
       fallback_channels_json: input.fallback_channels,
@@ -839,8 +863,6 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     : null;
   const existing = byEndpoint ??
     (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
-  const existingOrganizationId = idFromRelation(existing?.organization_id);
-  const existingAppId = idFromRelation(existing?.app_id);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -854,8 +876,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     user_id: input.user_id || null,
     user_email: input.user_email || null,
     user_phone: input.user_phone || null,
-    organization_id: input.organization_id || existingOrganizationId || null,
-    app_id: input.app_id || existingAppId || null,
+    ...browserSubscriptionRelationPayload(input, existing),
     permission: input.permission,
     capabilities_json: redactJsonRecord(input.capabilities),
     fallback_channels_json: input.fallback_channels,
