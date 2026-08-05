@@ -719,14 +719,16 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     }
 
     const existing = await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
+    const existingOrganizationId = idFromRelation(existing?.organization_id);
+    const existingAppId = idFromRelation(existing?.app_id);
     const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
       user_id: input.user_id || null,
       user_email: input.user_email || null,
       user_phone: input.user_phone || null,
-      organization_id: input.organization_id || null,
-      app_id: input.app_id || null,
+      organization_id: input.organization_id || existingOrganizationId || null,
+      app_id: input.app_id || existingAppId || null,
       permission: input.permission,
       capabilities_json: redactJsonRecord(input.capabilities),
       fallback_channels_json: input.fallback_channels,
@@ -774,6 +776,8 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
 
   const endpointHash = sha256(subscription.endpoint);
   const existing = await findBrowserSubscriptionByEndpointHash(endpointHash);
+  const existingOrganizationId = idFromRelation(existing?.organization_id);
+  const existingAppId = idFromRelation(existing?.app_id);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -787,8 +791,8 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     user_id: input.user_id || null,
     user_email: input.user_email || null,
     user_phone: input.user_phone || null,
-    organization_id: input.organization_id || null,
-    app_id: input.app_id || null,
+    organization_id: input.organization_id || existingOrganizationId || null,
+    app_id: input.app_id || existingAppId || null,
     permission: input.permission,
     capabilities_json: redactJsonRecord(input.capabilities),
     fallback_channels_json: input.fallback_channels,

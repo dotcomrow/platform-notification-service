@@ -54,6 +54,9 @@ export type PlatformApp = {
   display_name?: string | null;
   site_key?: string | null;
   keycloak_realm?: string | null;
+  domain?: string | null;
+  production_hostname?: string | null;
+  preview_hostname?: string | null;
   production_url?: string | null;
   preview_url?: string | null;
   deployment_status?: string | null;
