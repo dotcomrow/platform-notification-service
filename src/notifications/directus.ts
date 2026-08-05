@@ -890,9 +890,14 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     if (isEndpointHashUniqueError(error)) {
       const raced = await findBrowserSubscriptionAfterEndpointConflict(endpointHash, input.browser_installation_id);
       if (raced?.id) {
+        assertBrowserSubscriptionCanUpdate(raced, input);
         const patched = await patchBrowserSubscription(raced.id, payload);
         return patched ?? { ...raced, ...payload };
       }
+      throw Object.assign(
+        new Error("Browser push subscription endpoint is already registered. Reset the browser push subscription and try again."),
+        { status: 409 }
+      );
     }
     throw error;
   }
