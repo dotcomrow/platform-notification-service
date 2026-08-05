@@ -123,6 +123,10 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function addDirectusReadCacheBust(params: URLSearchParams): void {
+  params.set("_", `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+}
+
 const browserSubscriptionUpsertLocks = new Map<string, Promise<BrowserPushSubscriptionRecord>>();
 
 async function withBrowserSubscriptionUpsertLock(
@@ -568,6 +572,7 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
   params.set("filter[endpoint_hash][_eq]", endpointHash);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "1");
+  addDirectusReadCacheBust(params);
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
@@ -742,6 +747,7 @@ async function findBrowserSubscriptionByInstallationId(browserInstallationId: st
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "25");
+  addDirectusReadCacheBust(params);
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
@@ -986,6 +992,7 @@ async function listActiveBrowserSubscriptionsForInstallation(
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
+  addDirectusReadCacheBust(params);
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
