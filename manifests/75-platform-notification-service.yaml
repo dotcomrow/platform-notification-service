@@ -109,7 +109,15 @@ spec:
                 capabilities = ["read"]
               }
 
+              path "secret/data/directus/gravitee/clients/internal/cms-site-internal" {
+                capabilities = ["read"]
+              }
+
               path "secret/data/directus/gravitee/clients/cms-site-external" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/external/cms-site-external" {
                 capabilities = ["read"]
               }
 
@@ -117,7 +125,23 @@ spec:
                 capabilities = ["read"]
               }
 
+              path "secret/data/directus/gravitee/clients/internal/graphql-api" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/external/graphql-api" {
+                capabilities = ["read"]
+              }
+
               path "secret/data/directus/gravitee/clients/${graphql_api_client_id}" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/internal/${graphql_api_client_id}" {
+                capabilities = ["read"]
+              }
+
+              path "secret/data/directus/gravitee/clients/external/${graphql_api_client_id}" {
                 capabilities = ["read"]
               }
 
@@ -315,13 +339,13 @@ spec:
             - name: DIRECTUS_TOKEN_VAULT_KEY
               value: "token"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_KEYS
-              value: "cms-site-internal,cms-site-external,graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
+              value: "cms-site-internal,cms-site-external,internal/cms-site-internal,external/cms-site-external,graphql-api,internal/graphql-api,external/graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>,internal/<path:secret/data/keycloak-client-id-graphql-api#value>,external/<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_KEYS
-              value: "graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
+              value: "graphql-api,internal/graphql-api,external/graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>,internal/<path:secret/data/keycloak-client-id-graphql-api#value>,external/<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
@@ -333,7 +357,7 @@ spec:
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_KEYS
-              value: "graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>"
+              value: "graphql-api,internal/graphql-api,external/graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>,internal/<path:secret/data/keycloak-client-id-graphql-api#value>,external/<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/directus/gravitee/clients"
             - name: NOTIFICATION_INTAKE_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY

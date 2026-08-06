@@ -5,7 +5,11 @@ import { asString, truncate } from "../lib/json.js";
 import { resolveDirectusToken } from "../lib/directus.js";
 import { optionalVaultValue, resolveInternalToken } from "../lib/vault.js";
 
-const CLIENT_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CLIENT_KEY_SOURCE = "[A-Za-z0-9][A-Za-z0-9._-]{0,127}";
+const CLIENT_KEY_PATTERN = new RegExp(`^${CLIENT_KEY_SOURCE}$`);
+const CLIENT_TOKEN_LOOKUP_KEY_PATTERN = new RegExp(
+  `^(?:${CLIENT_KEY_SOURCE}|(?:internal|external)\\/${CLIENT_KEY_SOURCE})$`
+);
 
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left, "utf8");
@@ -42,7 +46,7 @@ async function trustedVaultClientTokens(
 ): Promise<string[]> {
   const tokens = new Set<string>();
   for (const clientKey of clientKeys) {
-    if (!CLIENT_KEY_PATTERN.test(clientKey)) {
+    if (!CLIENT_TOKEN_LOOKUP_KEY_PATTERN.test(clientKey)) {
       console.warn(`[platform-notification-service] ignoring invalid ${logLabel} client key '${truncate(clientKey, 120)}'`);
       continue;
     }
