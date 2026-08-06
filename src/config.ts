@@ -55,6 +55,8 @@ const envSchema = z.object({
   NOTIFICATION_REQUEST_COLLECTION: z.string().default("platform_notification_requests"),
   NOTIFICATION_DELIVERY_COLLECTION: z.string().default("platform_notification_delivery_attempts"),
   NOTIFICATION_BROWSER_SUBSCRIPTION_COLLECTION: z.string().default("platform_notification_browser_subscriptions"),
+  NOTIFICATION_TEMPLATE_COLLECTION: z.string().default("platform_notification_templates"),
+  NOTIFICATION_TEMPLATE_ASSET_COLLECTION: z.string().default("platform_notification_template_assets"),
   PLATFORM_APPS_COLLECTION: z.string().default("platform_apps"),
   PLATFORM_ORGANIZATIONS_COLLECTION: z.string().default("platform_organizations")
 });
@@ -129,6 +131,8 @@ export const config = {
   notificationRequestCollection: parsed.NOTIFICATION_REQUEST_COLLECTION,
   notificationDeliveryCollection: parsed.NOTIFICATION_DELIVERY_COLLECTION,
   notificationBrowserSubscriptionCollection: parsed.NOTIFICATION_BROWSER_SUBSCRIPTION_COLLECTION,
+  notificationTemplateCollection: parsed.NOTIFICATION_TEMPLATE_COLLECTION,
+  notificationTemplateAssetCollection: parsed.NOTIFICATION_TEMPLATE_ASSET_COLLECTION,
   platformAppsCollection: parsed.PLATFORM_APPS_COLLECTION,
   platformOrganizationsCollection: parsed.PLATFORM_ORGANIZATIONS_COLLECTION
 };

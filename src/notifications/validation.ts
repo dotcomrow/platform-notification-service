@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { asRecord, JsonRecord } from "../lib/json.js";
 import {
+  BrowserPushSubscriptionBrowseInput,
   BrowserPushSubscriptionCleanupInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionSearchInput,
+  BrowserPushSubscriptionStatsInput,
   NotificationDeliveryAttemptInput,
   NotificationRequestInput
 } from "./types.js";
@@ -41,12 +43,14 @@ const notificationRequestSchema = z.object({
   organization_id: z.string().trim().min(1).optional(),
   app_id: z.string().trim().min(1).optional(),
   actor_user_id: z.string().trim().min(1).optional(),
+  notification_key: z.string().trim().min(1).optional(),
   template_key: z.string().trim().min(1).optional(),
   locale: z.string().trim().min(1).optional(),
   channels: z.array(channelSchema).default([]),
   recipients: z.array(recipientHintSchema).default([]),
   subject: z.string().trim().min(1).optional(),
   body: z.string().trim().min(1).optional(),
+  parameters: jsonRecordSchema,
   data: jsonRecordSchema,
   metadata: jsonRecordSchema,
   dedupe_key: z.string().trim().min(1).optional(),
@@ -150,6 +154,42 @@ const browserPushSubscriptionSearchSchema = z.object({
   limit: z.number().int().min(1).max(100).default(25)
 });
 
+const browserPushSubscriptionBrowseBaseSchema = z.object({
+  query: z.string().trim().max(256).optional(),
+  field: z.enum(["all", "id", "user_id", "email", "name", "browser_installation_id", "source"]).default("all"),
+  name_prefix: z.string().trim().max(128).optional(),
+  organization_id: z.string().trim().min(1).optional(),
+  app_id: z.string().trim().min(1).optional(),
+  source: z.string().trim().min(1).optional(),
+  browser_installation_id: z.string().trim().min(1).optional(),
+  status: z.string().trim().min(1).optional(),
+  statuses: z.array(z.string().trim().min(1)).max(25).optional(),
+  permission: z.enum(["granted", "denied", "default", "unsupported"]).optional(),
+  persistent: z.boolean().optional(),
+  has_endpoint: z.boolean().optional(),
+  date_field: z.enum(["last_seen_at", "date_created", "date_updated", "expiration_time"]).default("last_seen_at"),
+  date_start: z.string().datetime({ offset: true }).optional(),
+  date_end: z.string().datetime({ offset: true }).optional(),
+  scan_limit: z.number().int().min(1).max(20000).optional()
+});
+
+const browserPushSubscriptionBrowseSchema = browserPushSubscriptionBrowseBaseSchema.extend({
+  sort: z.enum([
+    "last_seen_at_desc",
+    "last_seen_at_asc",
+    "created_desc",
+    "created_asc",
+    "updated_desc",
+    "updated_asc"
+  ]).default("last_seen_at_desc"),
+  limit: z.number().int().min(1).max(250).default(50),
+  offset: z.number().int().min(0).max(100000).default(0)
+});
+
+const browserPushSubscriptionStatsSchema = browserPushSubscriptionBrowseBaseSchema.extend({
+  bucket: z.enum(["hour", "day", "week"]).optional()
+});
+
 function unwrapInput(body: unknown): JsonRecord {
   let current = asRecord(body) ?? {};
   for (let depth = 0; depth < 4; depth += 1) {
@@ -194,4 +234,12 @@ export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubsc
 
 export function parseBrowserSubscriptionSearch(body: unknown): BrowserPushSubscriptionSearchInput {
   return browserPushSubscriptionSearchSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionSearchInput;
+}
+
+export function parseBrowserSubscriptionBrowse(body: unknown): BrowserPushSubscriptionBrowseInput {
+  return browserPushSubscriptionBrowseSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionBrowseInput;
+}
+
+export function parseBrowserSubscriptionStats(body: unknown): BrowserPushSubscriptionStatsInput {
+  return browserPushSubscriptionStatsSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionStatsInput;
 }

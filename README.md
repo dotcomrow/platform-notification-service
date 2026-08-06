@@ -13,11 +13,13 @@ message to Kafka for the NiFi communication flow.
 2. The service validates the request shape and internal bearer auth.
 3. If `app_id` or `organization_id` is present, the service loads app/org
    context from Directus.
-4. The request is stored in `platform_notification_requests`.
-5. A normalized event is published to `platform.notifications.requested.v1`.
-6. NiFi consumes the event, performs additional validation, resolves templates
-   and rules, and calls the delivery executor.
-7. NiFi/executors call this service to update request status and write delivery
+4. If `notification_key` is present, the service loads the active template from
+   Directus and renders subject/body/data/options from `parameters`.
+5. The request and rendered message are stored in `platform_notification_requests`.
+6. A normalized event is published to `platform.notifications.requested.v1`.
+7. NiFi consumes the rendered event, performs additional validation/routing, and
+   calls the delivery executor.
+8. NiFi/executors call this service to update request status and write delivery
    attempts.
 
 ## API
@@ -27,6 +29,8 @@ message to Kafka for the NiFi communication flow.
 - `GET /openapi.json`
 - `POST /internal/notifications`
 - `POST /internal/browser-subscriptions`
+- `POST /internal/browser-subscriptions/browse`
+- `POST /internal/browser-subscriptions/stats`
 - `GET /internal/notifications/:id`
 - `POST /internal/notifications/:id/status`
 - `POST /internal/notifications/:id/delivery-attempts`
@@ -40,7 +44,7 @@ Example request:
   "severity": "error",
   "priority": "high",
   "app_id": "00000000-0000-0000-0000-000000000000",
-  "template_key": "platform-deployment-failed",
+  "notification_key": "platform.deploy.operation-step",
   "channels": ["in_app", "email"],
   "recipients": [
     {
@@ -48,13 +52,49 @@ Example request:
       "id": "platform-admin"
     }
   ],
-  "data": {
+  "parameters": {
     "operation_id": "00000000-0000-0000-0000-000000000000",
-    "step": "prod-deploy"
+    "operation_type": "redeploy",
+    "step_key": "prod-deploy",
+    "step_label": "Deploy production",
+    "status": "failed",
+    "message": "Deploy production failed."
   },
+  "data": {},
   "metadata": {
     "correlation_source": "deployment"
   }
+}
+```
+
+Browser subscription browse/stat tools are exposed through OpenAPI for GraphQL
+action generation as `browseBrowserSubscriptions` and
+`getBrowserSubscriptionStats`.
+
+Example stats request:
+
+```json
+{
+  "date_field": "last_seen_at",
+  "date_start": "2026-08-05T00:00:00.000Z",
+  "date_end": "2026-08-06T00:00:00.000Z",
+  "bucket": "hour",
+  "scan_limit": 5000
+}
+```
+
+Example bounded browse request:
+
+```json
+{
+  "name_prefix": "c",
+  "status": "active",
+  "persistent": true,
+  "date_field": "last_seen_at",
+  "date_start": "2026-08-05T00:00:00.000Z",
+  "date_end": "2026-08-06T00:00:00.000Z",
+  "limit": 50,
+  "offset": 0
 }
 ```
 
@@ -77,8 +117,13 @@ The published event includes:
 - `organization_id`
 - `app_id`
 - `actor_user_id`
+- `notification_key`
 - `template_key`
 - `locale`
+- `subject`
+- `body`
+- `message`
+- `parameters`
 - `channels`
 - `recipients`
 - `data`
@@ -107,12 +152,15 @@ configurable through environment variables.
 - `organization_id`
 - `app_id`
 - `actor_user_id`
+- `notification_key`
 - `template_key`
 - `locale`
 - `subject_hint`
 - `body_hint`
 - `requested_channels_json`
 - `recipients_json`
+- `template_parameters_json`
+- `rendered_message_json`
 - `data_json`
 - `metadata_json`
 - `context_json`
@@ -169,10 +217,45 @@ configurable through environment variables.
 - `status`
 - `last_seen_at`
 
+`platform_notification_templates`:
+
+- `id`
+- `notification_key`
+- `name`
+- `description`
+- `status`
+- `locale`
+- `channels_json`
+- `required_parameters_json`
+- `sample_parameters_json`
+- `subject_template`
+- `title_template`
+- `body_template`
+- `text_template`
+- `html_template`
+- `data_template_json`
+- `options_template_json`
+- `assets_json`
+- `stylesheets_json`
+- `metadata_json`
+
+`platform_notification_template_assets`:
+
+- `id`
+- `template_id`
+- `notification_key`
+- `asset_key`
+- `asset_type`
+- `status`
+- `mime_type`
+- `url`
+- `directus_file`
+- `content`
+- `metadata_json`
+- `sort`
+
 Future collection set:
 
-- `platform_notification_templates`
-- `platform_notification_template_versions`
 - `platform_notification_preferences`
 - `platform_notification_suppression_entries`
 - `platform_notification_rule_bindings`
@@ -204,6 +287,8 @@ Important environment variables:
 - `NOTIFICATION_REQUEST_COLLECTION`
 - `NOTIFICATION_DELIVERY_COLLECTION`
 - `NOTIFICATION_BROWSER_SUBSCRIPTION_COLLECTION`
+- `NOTIFICATION_TEMPLATE_COLLECTION`
+- `NOTIFICATION_TEMPLATE_ASSET_COLLECTION`
 
 No provider tokens or credentials should be committed to this repo. Runtime
 credentials are resolved from Vault.

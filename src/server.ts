@@ -7,15 +7,17 @@ import { config } from "./config.js";
 import { enforceInternalAuth } from "./auth/internal-auth.js";
 import { directusHealth } from "./lib/directus.js";
 import { kafkaReady, publishJson } from "./lib/kafka.js";
-import { asRecord, redactJsonRecord, truncate } from "./lib/json.js";
+import { asRecord, JsonRecord, redactJsonRecord, truncate } from "./lib/json.js";
 import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
   cleanupBrowserPushSubscriptions,
   createDeliveryAttempt,
   createNotificationRequest,
+  browseBrowserPushSubscriptions,
   enrichNotificationRequest,
   findRequestByIdempotencyKey,
+  getBrowserPushSubscriptionStats,
   getBrowserPushSubscription,
   getNotificationRequest,
   markRequestQueueFailed,
@@ -27,8 +29,10 @@ import {
 } from "./notifications/directus.js";
 import {
   parseBrowserSubscriptionCleanup,
+  parseBrowserSubscriptionBrowse,
   parseBrowserSubscriptionLifecyclePatch,
   parseBrowserSubscriptionSearch,
+  parseBrowserSubscriptionStats,
   parseBrowserSubscription,
   parseDeliveryAttempt,
   parseNotificationRequest,
@@ -117,6 +121,7 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
     }
     throw error;
   }
+  const message = asRecord(input.message) ?? {};
   const eventPayload = {
     schema_version: 1,
     notification_request_id: requestRecord.id,
@@ -127,12 +132,15 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
     organization_id: input.organization_id || null,
     app_id: input.app_id || null,
     actor_user_id: input.actor_user_id || null,
-    template_key: input.template_key || null,
+    notification_key: input.notification_key || input.template_key || null,
+    template_key: input.template_key || input.notification_key || null,
     locale: input.locale || null,
-    subject: input.subject || null,
-    body: input.body || null,
+    subject: typeof message.subject === "string" ? message.subject : input.subject || null,
+    body: typeof message.body === "string" ? message.body : input.body || null,
+    message: input.message ? redactJsonRecord(input.message as unknown as JsonRecord) : null,
     channels: input.channels,
     recipients: input.recipients,
+    parameters: redactJsonRecord(input.parameters),
     data: redactJsonRecord(input.data),
     metadata: redactJsonRecord(input.metadata),
     context,
@@ -281,6 +289,34 @@ app.post("/internal/browser-subscriptions/search", async (req, res, next) => {
       ok: true,
       browser_subscriptions: subscriptions,
       count: subscriptions.length
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/browse", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionBrowse(req.body);
+    const result = await browseBrowserPushSubscriptions(input);
+    res.status(200).json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/stats", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionStats(req.body);
+    const stats = await getBrowserPushSubscriptionStats(input);
+    res.status(200).json({
+      ok: true,
+      stats
     });
   } catch (error) {
     next(error);

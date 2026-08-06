@@ -23,12 +23,15 @@ export type NotificationRequestInput = {
   organization_id?: string;
   app_id?: string;
   actor_user_id?: string;
+  notification_key?: string;
   template_key?: string;
   locale?: string;
   channels: NotificationChannel[];
   recipients: NotificationRecipientHint[];
   subject?: string;
   body?: string;
+  parameters: JsonRecord;
+  message?: RenderedNotificationMessage;
   data: JsonRecord;
   metadata: JsonRecord;
   dedupe_key?: string;
@@ -36,6 +39,47 @@ export type NotificationRequestInput = {
   correlation_id: string;
   scheduled_for?: string;
   expires_at?: string;
+};
+
+export type NotificationTemplateRecord = {
+  id: string;
+  notification_key?: string | null;
+  name?: string | null;
+  description?: string | null;
+  status?: string | null;
+  locale?: string | null;
+  channels_json?: NotificationChannel[] | null;
+  required_parameters_json?: JsonRecord | unknown[] | null;
+  sample_parameters_json?: JsonRecord | null;
+  subject_template?: string | null;
+  title_template?: string | null;
+  body_template?: string | null;
+  text_template?: string | null;
+  html_template?: string | null;
+  data_template_json?: JsonRecord | null;
+  options_template_json?: JsonRecord | null;
+  assets_json?: unknown[] | JsonRecord | null;
+  stylesheets_json?: unknown[] | JsonRecord | null;
+  metadata_json?: JsonRecord | null;
+  date_created?: string | null;
+  date_updated?: string | null;
+};
+
+export type RenderedNotificationMessage = {
+  notification_key?: string;
+  template_key?: string;
+  template_id?: string;
+  locale?: string;
+  subject?: string;
+  title?: string;
+  body?: string;
+  text?: string;
+  html?: string;
+  data: JsonRecord;
+  options: JsonRecord;
+  parameters: JsonRecord;
+  assets?: unknown[] | JsonRecord | null;
+  stylesheets?: unknown[] | JsonRecord | null;
 };
 
 export type PlatformOrganization = {
@@ -79,10 +123,13 @@ export type NotificationRequestRecord = {
   organization_id?: string | PlatformOrganization | null;
   app_id?: string | PlatformApp | null;
   actor_user_id?: string | null;
+  notification_key?: string | null;
   template_key?: string | null;
   locale?: string | null;
   requested_channels_json?: NotificationChannel[] | null;
   recipients_json?: NotificationRecipientHint[] | null;
+  template_parameters_json?: JsonRecord | null;
+  rendered_message_json?: RenderedNotificationMessage | JsonRecord | null;
   data_json?: JsonRecord | null;
   context_json?: NotificationContext | null;
   metadata_json?: JsonRecord | null;
@@ -159,6 +206,94 @@ export type BrowserPushSubscriptionSearchResult = {
   last_seen_at?: string | null;
   date_created?: string | null;
   date_updated?: string | null;
+};
+
+export type BrowserPushSubscriptionBrowseField =
+  | BrowserPushSubscriptionSearchField
+  | "browser_installation_id"
+  | "source";
+
+export type BrowserPushSubscriptionDateField =
+  | "last_seen_at"
+  | "date_created"
+  | "date_updated"
+  | "expiration_time";
+
+export type BrowserPushSubscriptionBrowseSort =
+  | "last_seen_at_desc"
+  | "last_seen_at_asc"
+  | "created_desc"
+  | "created_asc"
+  | "updated_desc"
+  | "updated_asc";
+
+export type BrowserPushSubscriptionStatsBucket = "hour" | "day" | "week";
+
+export type BrowserPushSubscriptionBrowseInput = {
+  query?: string;
+  field?: BrowserPushSubscriptionBrowseField;
+  name_prefix?: string;
+  organization_id?: string;
+  app_id?: string;
+  source?: string;
+  browser_installation_id?: string;
+  status?: string;
+  statuses?: string[];
+  permission?: string;
+  persistent?: boolean;
+  has_endpoint?: boolean;
+  date_field?: BrowserPushSubscriptionDateField;
+  date_start?: string;
+  date_end?: string;
+  sort?: BrowserPushSubscriptionBrowseSort;
+  limit?: number;
+  offset?: number;
+  scan_limit?: number;
+};
+
+export type BrowserPushSubscriptionStatsInput = Omit<
+  BrowserPushSubscriptionBrowseInput,
+  "limit" | "offset" | "sort"
+> & {
+  bucket?: BrowserPushSubscriptionStatsBucket;
+};
+
+export type BrowserPushSubscriptionBrowseResult = BrowserPushSubscriptionSearchResult & {
+  source?: string | null;
+  user_agent?: string | null;
+  has_endpoint: boolean;
+  endpoint_hash_prefix?: string | null;
+  expiration_time?: string | null;
+  fallback_channels?: BrowserNotificationFallbackChannel[] | null;
+  persistent?: boolean | null;
+  notification_link?: JsonRecord | null;
+  capability_reason?: string | null;
+  registration_status?: string | null;
+  fallback_required?: boolean | null;
+  disabled_by_user?: boolean | null;
+};
+
+export type BrowserPushSubscriptionStats = {
+  total_records: number;
+  matching_records: number;
+  matching_records_exact: boolean;
+  scanned_records: number;
+  scan_limit: number;
+  scan_truncated: boolean;
+  unique_display_names: number;
+  unique_browser_installations: number;
+  unique_user_ids: number;
+  unique_user_emails: number;
+  status_counts: Record<string, number>;
+  permission_counts: Record<string, number>;
+  source_counts: Record<string, number>;
+  persistent_counts: {
+    persistent: number;
+    non_persistent: number;
+    unknown: number;
+  };
+  display_name_initial_counts: Record<string, number>;
+  date_buckets?: Record<string, number>;
 };
 
 export type BrowserPushSubscriptionRecord = {

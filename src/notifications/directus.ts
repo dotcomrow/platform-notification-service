@@ -9,15 +9,30 @@ import {
   NotificationRequestInput,
   NotificationRequestRecord,
   NotificationStatus,
+  NotificationTemplateRecord,
+  RenderedNotificationMessage,
+  BrowserPushSubscriptionBrowseInput,
+  BrowserPushSubscriptionBrowseResult,
   BrowserPushSubscriptionCleanupInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionRecord,
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionSearchResult,
+  BrowserPushSubscriptionStats,
+  BrowserPushSubscriptionStatsInput,
   PlatformApp,
   PlatformOrganization
 } from "./types.js";
+
+type DirectusListMeta = {
+  filter_count?: number | string;
+  total_count?: number | string;
+};
+
+type DirectusMetaListResponse<T> = DirectusListResponse<T> & {
+  meta?: DirectusListMeta;
+};
 
 function idFromRelation(value: unknown): string {
   if (typeof value === "string") {
@@ -214,6 +229,231 @@ export async function getPlatformApp(appId: string): Promise<PlatformApp | null>
   return response.data?.id ? response.data : null;
 }
 
+function notificationTemplateKey(input: NotificationRequestInput): string {
+  return asString(input.notification_key) || asString(input.template_key);
+}
+
+function isActiveNotificationTemplate(template: NotificationTemplateRecord): boolean {
+  const status = asString(template.status, "draft").toLowerCase();
+  return status === "published" || status === "active";
+}
+
+function localeRank(template: NotificationTemplateRecord, requestedLocale: string): number {
+  const locale = asString(template.locale).toLowerCase();
+  const requested = requestedLocale.toLowerCase();
+  if (requested && locale === requested) {
+    return 0;
+  }
+  if (!locale || locale === "default" || locale === "en" || locale === "en-us") {
+    return 1;
+  }
+  return 2;
+}
+
+async function getNotificationTemplate(
+  notificationKey: string,
+  locale?: string
+): Promise<NotificationTemplateRecord | null> {
+  const params = new URLSearchParams();
+  params.set("fields", [
+    "id",
+    "notification_key",
+    "name",
+    "description",
+    "status",
+    "locale",
+    "channels_json",
+    "required_parameters_json",
+    "sample_parameters_json",
+    "subject_template",
+    "title_template",
+    "body_template",
+    "text_template",
+    "html_template",
+    "data_template_json",
+    "options_template_json",
+    "assets_json",
+    "stylesheets_json",
+    "metadata_json",
+    "date_created",
+    "date_updated"
+  ].join(","));
+  params.set("filter[notification_key][_eq]", notificationKey);
+  params.set("sort", "-date_updated,-date_created");
+  params.set("limit", "50");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<NotificationTemplateRecord>>(
+    `/items/${encodeURIComponent(config.notificationTemplateCollection)}?${params.toString()}`
+  );
+  const requestedLocale = asString(locale);
+  return (response.data ?? [])
+    .filter(isActiveNotificationTemplate)
+    .sort((left, right) => {
+      const localeCompare = localeRank(left, requestedLocale) - localeRank(right, requestedLocale);
+      if (localeCompare !== 0) {
+        return localeCompare;
+      }
+      return asString(right.date_updated || right.date_created).localeCompare(asString(left.date_updated || left.date_created));
+    })[0] ?? null;
+}
+
+function parameterValue(parameters: JsonRecord, path: string): unknown {
+  const parts = path.split(".").map((part) => part.trim()).filter(Boolean);
+  let current: unknown = parameters;
+  for (const part of parts) {
+    if (Array.isArray(current)) {
+      const index = Number.parseInt(part, 10);
+      current = Number.isFinite(index) ? current[index] : undefined;
+      continue;
+    }
+    const record = asRecord(current);
+    if (!record || !(part in record)) {
+      return undefined;
+    }
+    current = record[part];
+  }
+  return current;
+}
+
+function renderTemplatePrimitive(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function renderTemplateString(template: string | null | undefined, parameters: JsonRecord): string {
+  const source = asString(template);
+  if (!source) {
+    return "";
+  }
+  return source.replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (_match, key: string) => {
+    return renderTemplatePrimitive(parameterValue(parameters, key));
+  });
+}
+
+function renderTemplateJson(value: unknown, parameters: JsonRecord): unknown {
+  if (typeof value === "string") {
+    return renderTemplateString(value, parameters);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => renderTemplateJson(entry, parameters));
+  }
+  const record = asRecord(value);
+  if (record) {
+    return Object.fromEntries(
+      Object.entries(record).map(([key, entry]) => [key, renderTemplateJson(entry, parameters)])
+    );
+  }
+  return value;
+}
+
+function buildNotificationTemplateParameters(
+  input: NotificationRequestInput,
+  context: NotificationContext
+): JsonRecord {
+  return {
+    ...(asRecord(input.data) ?? {}),
+    ...(asRecord(input.parameters) ?? {}),
+    data: redactJsonRecord(asRecord(input.data) ?? {}),
+    metadata: redactJsonRecord(asRecord(input.metadata) ?? {}),
+    context,
+    organization: context.organization ?? null,
+    app: context.app ?? null,
+    notification: {
+      event_key: input.event_key,
+      source: input.source,
+      severity: input.severity,
+      priority: input.priority,
+      notification_key: notificationTemplateKey(input),
+      locale: input.locale || null,
+      correlation_id: input.correlation_id
+    }
+  };
+}
+
+function fallbackRenderedMessage(
+  input: NotificationRequestInput,
+  parameters: JsonRecord
+): RenderedNotificationMessage | undefined {
+  const subject = renderTemplateString(input.subject, parameters);
+  const body = renderTemplateString(input.body, parameters);
+  if (!subject && !body) {
+    return undefined;
+  }
+  return {
+    notification_key: notificationTemplateKey(input) || undefined,
+    template_key: input.template_key || input.notification_key,
+    locale: input.locale,
+    subject,
+    title: subject,
+    body,
+    text: body,
+    data: {},
+    options: {},
+    parameters
+  };
+}
+
+async function renderNotificationMessage(
+  input: NotificationRequestInput,
+  context: NotificationContext
+): Promise<NotificationRequestInput> {
+  const notificationKey = notificationTemplateKey(input);
+  const parameters = buildNotificationTemplateParameters(input, context);
+  if (!notificationKey) {
+    const fallback = fallbackRenderedMessage(input, parameters);
+    return {
+      ...input,
+      parameters,
+      ...(fallback ? { message: fallback } : {})
+    };
+  }
+
+  const template = await getNotificationTemplate(notificationKey, input.locale);
+  if (!template?.id) {
+    throw Object.assign(new Error(`Notification template ${notificationKey} was not found or is not active.`), { status: 404 });
+  }
+
+  const subject = renderTemplateString(template.subject_template, parameters);
+  const title = renderTemplateString(template.title_template, parameters) || subject;
+  const body = renderTemplateString(template.body_template, parameters);
+  const text = renderTemplateString(template.text_template, parameters) || body;
+  const html = renderTemplateString(template.html_template, parameters);
+  const data = asRecord(renderTemplateJson(template.data_template_json ?? {}, parameters)) ?? {};
+  const options = asRecord(renderTemplateJson(template.options_template_json ?? {}, parameters)) ?? {};
+
+  return {
+    ...input,
+    notification_key: notificationKey,
+    template_key: input.template_key || notificationKey,
+    channels: input.channels.length ? input.channels : (template.channels_json ?? []),
+    parameters,
+    message: {
+      notification_key: notificationKey,
+      template_key: input.template_key || notificationKey,
+      template_id: template.id,
+      locale: asString(template.locale) || input.locale,
+      subject,
+      title,
+      body,
+      text,
+      html,
+      data: redactJsonRecord(data),
+      options: redactJsonRecord(options),
+      parameters: redactJsonRecord(parameters),
+      assets: template.assets_json ?? null,
+      stylesheets: template.stylesheets_json ?? null
+    }
+  };
+}
+
 export async function enrichNotificationRequest(input: NotificationRequestInput): Promise<{ input: NotificationRequestInput; context: NotificationContext }> {
   const context: NotificationContext = {};
   let organizationId = input.organization_id;
@@ -245,7 +485,7 @@ export async function enrichNotificationRequest(input: NotificationRequestInput)
   };
 
   return {
-    input: await resolveBrowserPushRecipients(normalizedInput),
+    input: await renderNotificationMessage(await resolveBrowserPushRecipients(normalizedInput), context),
     context
   };
 }
@@ -397,12 +637,15 @@ export async function createNotificationRequest(
         organization_id: input.organization_id || null,
         app_id: input.app_id || null,
         actor_user_id: input.actor_user_id || null,
-        template_key: input.template_key || null,
+        notification_key: input.notification_key || input.template_key || null,
+        template_key: input.template_key || input.notification_key || null,
         locale: input.locale || null,
-        subject_hint: input.subject || null,
-        body_hint: input.body || null,
+        subject_hint: input.message?.subject || input.subject || null,
+        body_hint: input.message?.body || input.body || null,
         requested_channels_json: input.channels,
         recipients_json: input.recipients,
+        template_parameters_json: redactJsonRecord(input.parameters),
+        rendered_message_json: input.message ? redactJsonRecord(input.message as unknown as JsonRecord) : {},
         data_json: redactJsonRecord(input.data),
         metadata_json: redactJsonRecord(input.metadata),
         context_json: context,
@@ -438,10 +681,13 @@ export async function getNotificationRequest(id: string): Promise<NotificationRe
     "organization_id",
     "app_id",
     "actor_user_id",
+    "notification_key",
     "template_key",
     "locale",
     "requested_channels_json",
     "recipients_json",
+    "template_parameters_json",
+    "rendered_message_json",
     "data_json",
     "context_json",
     "metadata_json",
@@ -703,6 +949,12 @@ function searchHaystack(record: BrowserPushSubscriptionRecord, field: string): s
   if (field === "email") {
     return [asString(record.user_email)];
   }
+  if (field === "browser_installation_id") {
+    return [asString(record.browser_installation_id)];
+  }
+  if (field === "source") {
+    return [asString(record.source)];
+  }
   if (field === "name") {
     return [displayName];
   }
@@ -711,6 +963,7 @@ function searchHaystack(record: BrowserPushSubscriptionRecord, field: string): s
     asString(record.browser_installation_id),
     asString(record.user_id),
     asString(record.user_email),
+    asString(record.source),
     displayName
   ];
 }
@@ -766,6 +1019,440 @@ export async function searchBrowserPushSubscriptions(
     .filter((record) => subscriptionMatchesSearch(record, query, field))
     .slice(0, limit)
     .map(browserSubscriptionSearchResult);
+}
+
+const BROWSER_SUBSCRIPTION_BROWSE_FIELDS = [
+  "id",
+  "source",
+  "browser_installation_id",
+  "endpoint_hash",
+  "expiration_time",
+  "user_id",
+  "user_email",
+  "organization_id",
+  "app_id",
+  "permission",
+  "capabilities_json",
+  "fallback_channels_json",
+  "user_agent",
+  "metadata_json",
+  "status",
+  "last_seen_at",
+  "date_created",
+  "date_updated"
+].join(",");
+
+function normalizedStringList(values: Array<string | undefined> | undefined): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values ?? []) {
+    const trimmed = asString(value);
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function browserSubscriptionStatuses(input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput): string[] {
+  return normalizedStringList([input.status, ...(input.statuses ?? [])]);
+}
+
+function browserSubscriptionSort(sort: BrowserPushSubscriptionBrowseInput["sort"]): string {
+  switch (sort) {
+    case "last_seen_at_asc":
+      return "last_seen_at,date_updated,date_created";
+    case "created_desc":
+      return "-date_created,-last_seen_at,-date_updated";
+    case "created_asc":
+      return "date_created,last_seen_at,date_updated";
+    case "updated_desc":
+      return "-date_updated,-last_seen_at,-date_created";
+    case "updated_asc":
+      return "date_updated,last_seen_at,date_created";
+    case "last_seen_at_desc":
+    default:
+      return "-last_seen_at,-date_updated,-date_created";
+  }
+}
+
+function addBrowserSubscriptionDirectFilters(
+  params: URLSearchParams,
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput
+): void {
+  if (input.organization_id) {
+    params.set("filter[organization_id][_eq]", input.organization_id);
+  }
+  if (input.app_id) {
+    params.set("filter[app_id][_eq]", input.app_id);
+  }
+  if (input.source) {
+    params.set("filter[source][_eq]", input.source);
+  }
+  if (input.browser_installation_id) {
+    params.set("filter[browser_installation_id][_eq]", input.browser_installation_id);
+  }
+
+  const statuses = browserSubscriptionStatuses(input);
+  if (statuses.length === 1) {
+    params.set("filter[status][_eq]", statuses[0]);
+  }
+  if (input.permission) {
+    params.set("filter[permission][_eq]", input.permission);
+  }
+  if (typeof input.has_endpoint === "boolean") {
+    params.set(input.has_endpoint ? "filter[endpoint_hash][_nnull]" : "filter[endpoint_hash][_null]", "true");
+  }
+
+  const dateField = asString(input.date_field, "last_seen_at");
+  if (input.date_start) {
+    params.set(`filter[${dateField}][_gte]`, input.date_start);
+  }
+  if (input.date_end) {
+    params.set(`filter[${dateField}][_lt]`, input.date_end);
+  }
+
+  const query = asString(input.query);
+  const field = asString(input.field, "all");
+  if (!query) {
+    return;
+  }
+  if (field === "id") {
+    params.set("filter[id][_icontains]", query);
+  } else if (field === "user_id") {
+    params.set("filter[user_id][_icontains]", query);
+  } else if (field === "email") {
+    params.set("filter[user_email][_icontains]", query);
+  } else if (field === "browser_installation_id") {
+    params.set("filter[browser_installation_id][_icontains]", query);
+  } else if (field === "source") {
+    params.set("filter[source][_icontains]", query);
+  }
+}
+
+function browserSubscriptionNeedsServiceSideFiltering(
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput
+): boolean {
+  const query = asString(input.query);
+  const field = asString(input.field, "all");
+  return browserSubscriptionStatuses(input).length > 1
+    || Boolean(query && (field === "all" || field === "name"))
+    || Boolean(asString(input.name_prefix))
+    || typeof input.persistent === "boolean";
+}
+
+function browserSubscriptionPersistentFlag(record: BrowserPushSubscriptionRecord): boolean | null {
+  const link = browserSubscriptionNotificationLink(record);
+  return typeof link?.persistent === "boolean" ? link.persistent : null;
+}
+
+function subscriptionMatchesBrowse(
+  record: BrowserPushSubscriptionRecord,
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput
+): boolean {
+  const statuses = browserSubscriptionStatuses(input);
+  if (statuses.length > 0 && !statuses.includes(asString(record.status))) {
+    return false;
+  }
+
+  if (typeof input.persistent === "boolean" && browserSubscriptionPersistentFlag(record) !== input.persistent) {
+    return false;
+  }
+
+  const namePrefix = asString(input.name_prefix).toLowerCase();
+  if (namePrefix && !browserSubscriptionDisplayName(record).toLowerCase().startsWith(namePrefix)) {
+    return false;
+  }
+
+  const query = asString(input.query).toLowerCase();
+  const field = asString(input.field, "all");
+  if (query && !subscriptionMatchesSearch(record, query, field)) {
+    return false;
+  }
+
+  return true;
+}
+
+function directusMetaCount(meta: DirectusListMeta | undefined): number {
+  const raw = meta?.filter_count ?? meta?.total_count ?? 0;
+  const count = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+async function countBrowserPushSubscriptions(
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput
+): Promise<number> {
+  const params = new URLSearchParams();
+  params.set("limit", "0");
+  params.set("meta", "filter_count");
+  addBrowserSubscriptionDirectFilters(params, input);
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusMetaListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return directusMetaCount(response.meta);
+}
+
+async function fetchBrowserSubscriptionPage(
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput,
+  limit: number,
+  offset: number,
+  sort: string
+): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_BROWSE_FIELDS);
+  params.set("sort", sort);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  addBrowserSubscriptionDirectFilters(params, input);
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+function resolveScanLimit(
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput,
+  fallback: number
+): number {
+  const requested = Math.floor(input.scan_limit ?? fallback);
+  return Math.max(1, Math.min(20000, requested));
+}
+
+async function scanBrowserSubscriptions(
+  input: BrowserPushSubscriptionBrowseInput | BrowserPushSubscriptionStatsInput,
+  totalRecords: number,
+  scanLimit: number,
+  sort: string
+): Promise<{ records: BrowserPushSubscriptionRecord[]; scannedRecords: number; scanTruncated: boolean }> {
+  const records: BrowserPushSubscriptionRecord[] = [];
+  const pageSize = Math.min(500, scanLimit);
+  let offset = 0;
+  while (records.length < scanLimit) {
+    const limit = Math.min(pageSize, scanLimit - records.length);
+    const page = await fetchBrowserSubscriptionPage(input, limit, offset, sort);
+    records.push(...page);
+    offset += page.length;
+    if (page.length < limit) {
+      break;
+    }
+  }
+  return {
+    records,
+    scannedRecords: records.length,
+    scanTruncated: totalRecords > records.length
+  };
+}
+
+function browserSubscriptionBrowseResult(record: BrowserPushSubscriptionRecord): BrowserPushSubscriptionBrowseResult {
+  const capabilities = asRecord(record.capabilities_json);
+  const notificationLink = browserSubscriptionNotificationLink(record);
+  const fallbackChannels = Array.isArray(record.fallback_channels_json)
+    ? record.fallback_channels_json
+    : null;
+  return {
+    ...browserSubscriptionSearchResult(record),
+    source: record.source || null,
+    user_agent: record.user_agent || null,
+    has_endpoint: Boolean(record.endpoint_hash),
+    endpoint_hash_prefix: record.endpoint_hash ? record.endpoint_hash.slice(0, 12) : null,
+    expiration_time: record.expiration_time || null,
+    fallback_channels: fallbackChannels,
+    persistent: browserSubscriptionPersistentFlag(record),
+    notification_link: notificationLink,
+    capability_reason: asString(capabilities?.reason) || null,
+    registration_status: asString(capabilities?.registration_status) || null,
+    fallback_required: typeof capabilities?.fallback_required === "boolean" ? capabilities.fallback_required : null,
+    disabled_by_user: typeof capabilities?.disabled_by_user === "boolean" ? capabilities.disabled_by_user : null
+  };
+}
+
+export async function browseBrowserPushSubscriptions(
+  input: BrowserPushSubscriptionBrowseInput
+): Promise<{
+  browser_subscriptions: BrowserPushSubscriptionBrowseResult[];
+  total_records: number;
+  matching_records: number;
+  matching_records_exact: boolean;
+  count: number;
+  limit: number;
+  offset: number;
+  next_offset: number | null;
+  scanned_records: number;
+  scan_limit: number;
+  scan_truncated: boolean;
+}> {
+  const limit = Math.max(1, Math.min(250, Math.floor(input.limit ?? 50)));
+  const offset = Math.max(0, Math.floor(input.offset ?? 0));
+  const sort = browserSubscriptionSort(input.sort);
+  const totalRecords = await countBrowserPushSubscriptions(input);
+  const serviceSideFiltering = browserSubscriptionNeedsServiceSideFiltering(input);
+
+  if (!serviceSideFiltering) {
+    const records = await fetchBrowserSubscriptionPage(input, limit, offset, sort);
+    const nextOffset = offset + records.length < totalRecords ? offset + records.length : null;
+    return {
+      browser_subscriptions: records.map(browserSubscriptionBrowseResult),
+      total_records: totalRecords,
+      matching_records: totalRecords,
+      matching_records_exact: true,
+      count: records.length,
+      limit,
+      offset,
+      next_offset: nextOffset,
+      scanned_records: records.length,
+      scan_limit: limit,
+      scan_truncated: false
+    };
+  }
+
+  const scanLimit = resolveScanLimit(input, Math.max(1000, offset + limit));
+  const scanned = await scanBrowserSubscriptions(input, totalRecords, scanLimit, sort);
+  const matching = scanned.records.filter((record) => subscriptionMatchesBrowse(record, input));
+  const page = matching.slice(offset, offset + limit);
+  const hasMore = matching.length > offset + limit || scanned.scanTruncated;
+  return {
+    browser_subscriptions: page.map(browserSubscriptionBrowseResult),
+    total_records: totalRecords,
+    matching_records: matching.length,
+    matching_records_exact: !scanned.scanTruncated,
+    count: page.length,
+    limit,
+    offset,
+    next_offset: hasMore && page.length > 0 ? offset + page.length : null,
+    scanned_records: scanned.scannedRecords,
+    scan_limit: scanLimit,
+    scan_truncated: scanned.scanTruncated
+  };
+}
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function displayNameInitial(displayName: string): string {
+  const first = displayName.trim()[0]?.toUpperCase();
+  if (!first) {
+    return "(blank)";
+  }
+  return /^[A-Z0-9]$/.test(first) ? first : "#";
+}
+
+function dateBucketKey(value: string | null | undefined, bucket: BrowserPushSubscriptionStatsInput["bucket"]): string | null {
+  if (!bucket || !value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  if (bucket === "hour") {
+    date.setUTCMinutes(0, 0, 0);
+    return date.toISOString();
+  }
+  if (bucket === "day") {
+    date.setUTCHours(0, 0, 0, 0);
+    return date.toISOString().slice(0, 10);
+  }
+  const day = date.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  date.setUTCDate(date.getUTCDate() + mondayOffset);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.toISOString().slice(0, 10);
+}
+
+function recordDateField(record: BrowserPushSubscriptionRecord, field: string): string | null | undefined {
+  if (field === "date_created") {
+    return record.date_created;
+  }
+  if (field === "date_updated") {
+    return record.date_updated;
+  }
+  if (field === "expiration_time") {
+    return record.expiration_time;
+  }
+  return record.last_seen_at;
+}
+
+export async function getBrowserPushSubscriptionStats(
+  input: BrowserPushSubscriptionStatsInput
+): Promise<BrowserPushSubscriptionStats> {
+  const sort = browserSubscriptionSort("last_seen_at_desc");
+  const totalRecords = await countBrowserPushSubscriptions(input);
+  const scanLimit = resolveScanLimit(input, 5000);
+  const scanned = await scanBrowserSubscriptions(input, totalRecords, scanLimit, sort);
+  const matching = scanned.records.filter((record) => subscriptionMatchesBrowse(record, input));
+  const serviceSideFiltering = browserSubscriptionNeedsServiceSideFiltering(input);
+  const uniqueDisplayNames = new Set<string>();
+  const uniqueBrowserInstallations = new Set<string>();
+  const uniqueUserIds = new Set<string>();
+  const uniqueUserEmails = new Set<string>();
+  const statusCounts: Record<string, number> = {};
+  const permissionCounts: Record<string, number> = {};
+  const sourceCounts: Record<string, number> = {};
+  const displayNameInitialCounts: Record<string, number> = {};
+  const persistentCounts = { persistent: 0, non_persistent: 0, unknown: 0 };
+  const dateBuckets: Record<string, number> = {};
+
+  for (const record of matching) {
+    const displayName = browserSubscriptionDisplayName(record);
+    if (displayName) {
+      uniqueDisplayNames.add(displayName.toLowerCase());
+    }
+    const browserInstallationId = asString(record.browser_installation_id);
+    if (browserInstallationId) {
+      uniqueBrowserInstallations.add(browserInstallationId);
+    }
+    const userId = asString(record.user_id);
+    if (userId) {
+      uniqueUserIds.add(userId);
+    }
+    const userEmail = asString(record.user_email).toLowerCase();
+    if (userEmail) {
+      uniqueUserEmails.add(userEmail);
+    }
+
+    incrementCount(statusCounts, asString(record.status, "(blank)"));
+    incrementCount(permissionCounts, asString(record.permission, "(blank)"));
+    incrementCount(sourceCounts, asString(record.source, "(blank)"));
+    incrementCount(displayNameInitialCounts, displayNameInitial(displayName));
+
+    const persistent = browserSubscriptionPersistentFlag(record);
+    if (persistent === true) {
+      persistentCounts.persistent += 1;
+    } else if (persistent === false) {
+      persistentCounts.non_persistent += 1;
+    } else {
+      persistentCounts.unknown += 1;
+    }
+
+    const bucketKey = dateBucketKey(recordDateField(record, asString(input.date_field, "last_seen_at")), input.bucket);
+    if (bucketKey) {
+      incrementCount(dateBuckets, bucketKey);
+    }
+  }
+
+  return {
+    total_records: totalRecords,
+    matching_records: serviceSideFiltering ? matching.length : totalRecords,
+    matching_records_exact: !serviceSideFiltering || !scanned.scanTruncated,
+    scanned_records: scanned.scannedRecords,
+    scan_limit: scanLimit,
+    scan_truncated: scanned.scanTruncated,
+    unique_display_names: uniqueDisplayNames.size,
+    unique_browser_installations: uniqueBrowserInstallations.size,
+    unique_user_ids: uniqueUserIds.size,
+    unique_user_emails: uniqueUserEmails.size,
+    status_counts: statusCounts,
+    permission_counts: permissionCounts,
+    source_counts: sourceCounts,
+    persistent_counts: persistentCounts,
+    display_name_initial_counts: displayNameInitialCounts,
+    ...(input.bucket ? { date_buckets: dateBuckets } : {})
+  };
 }
 
 async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {

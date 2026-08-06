@@ -22,7 +22,12 @@ function allowsBrowserPushTrustedTokens(req: Request): boolean {
 }
 
 function allowsBrowserSubscriptionSearchTrustedTokens(req: Request): boolean {
-  return req.method.toUpperCase() === "POST" && req.path === "/internal/browser-subscriptions/search";
+  if (req.method.toUpperCase() !== "POST") {
+    return false;
+  }
+  return req.path === "/internal/browser-subscriptions/search"
+    || req.path === "/internal/browser-subscriptions/browse"
+    || req.path === "/internal/browser-subscriptions/stats";
 }
 
 function allowsNotificationIntakeTrustedTokens(req: Request): boolean {

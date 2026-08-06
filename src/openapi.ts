@@ -22,6 +22,7 @@ export const openApiSpec = {
           organization_id: { type: "string" },
           app_id: { type: "string" },
           actor_user_id: { type: "string" },
+          notification_key: { type: "string" },
           template_key: { type: "string" },
           locale: { type: "string" },
           channels: {
@@ -35,7 +36,7 @@ export const openApiSpec = {
               required: ["type"],
               additionalProperties: true,
               properties: {
-                type: { type: "string", enum: ["user", "role", "group", "organization", "app", "email", "phone", "topic", "webhook"] },
+                type: { type: "string", enum: ["user", "role", "group", "organization", "app", "browser_subscription", "email", "phone", "topic", "webhook"] },
                 id: { type: "string" },
                 address: { type: "string" },
                 channels: { type: "array", items: { type: "string" } },
@@ -46,6 +47,20 @@ export const openApiSpec = {
           },
           subject: { type: "string" },
           body: { type: "string" },
+          parameters: { type: "object", additionalProperties: true },
+          message: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              subject: { type: "string" },
+              title: { type: "string" },
+              body: { type: "string" },
+              text: { type: "string" },
+              html: { type: "string" },
+              data: { type: "object", additionalProperties: true },
+              options: { type: "object", additionalProperties: true }
+            }
+          },
           data: { type: "object", additionalProperties: true },
           metadata: { type: "object", additionalProperties: true },
           dedupe_key: { type: "string" },
@@ -185,6 +200,134 @@ export const openApiSpec = {
                 date_created: { type: "string", nullable: true },
                 date_updated: { type: "string", nullable: true }
               }
+            }
+          }
+        }
+      },
+      BrowserPushSubscriptionBrowseRequest: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          query: { type: "string" },
+          field: { type: "string", enum: ["all", "id", "user_id", "email", "name", "browser_installation_id", "source"] },
+          name_prefix: { type: "string" },
+          organization_id: { type: "string" },
+          app_id: { type: "string" },
+          source: { type: "string" },
+          browser_installation_id: { type: "string" },
+          status: { type: "string" },
+          statuses: { type: "array", items: { type: "string" }, maxItems: 25 },
+          permission: { type: "string", enum: ["granted", "denied", "default", "unsupported"] },
+          persistent: { type: "boolean" },
+          has_endpoint: { type: "boolean" },
+          date_field: { type: "string", enum: ["last_seen_at", "date_created", "date_updated", "expiration_time"] },
+          date_start: { type: "string", format: "date-time" },
+          date_end: { type: "string", format: "date-time" },
+          sort: {
+            type: "string",
+            enum: ["last_seen_at_desc", "last_seen_at_asc", "created_desc", "created_asc", "updated_desc", "updated_asc"]
+          },
+          limit: { type: "integer", minimum: 1, maximum: 250 },
+          offset: { type: "integer", minimum: 0, maximum: 100000 },
+          scan_limit: { type: "integer", minimum: 1, maximum: 20000 }
+        }
+      },
+      BrowserPushSubscriptionBrowseResponse: {
+        type: "object",
+        required: ["ok", "browser_subscriptions", "count", "total_records", "matching_records"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          count: { type: "integer" },
+          total_records: { type: "integer" },
+          matching_records: { type: "integer" },
+          matching_records_exact: { type: "boolean" },
+          limit: { type: "integer" },
+          offset: { type: "integer" },
+          next_offset: { type: "integer", nullable: true },
+          scanned_records: { type: "integer" },
+          scan_limit: { type: "integer" },
+          scan_truncated: { type: "boolean" },
+          browser_subscriptions: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                id: { type: "string" },
+                source: { type: "string", nullable: true },
+                browser_installation_id: { type: "string", nullable: true },
+                user_id: { type: "string", nullable: true },
+                user_email: { type: "string", nullable: true },
+                display_name: { type: "string", nullable: true },
+                organization_id: { type: "string", nullable: true },
+                app_id: { type: "string", nullable: true },
+                status: { type: "string", nullable: true },
+                permission: { type: "string", nullable: true },
+                persistent: { type: "boolean", nullable: true },
+                has_endpoint: { type: "boolean" },
+                endpoint_hash_prefix: { type: "string", nullable: true },
+                capability_reason: { type: "string", nullable: true },
+                registration_status: { type: "string", nullable: true },
+                fallback_required: { type: "boolean", nullable: true },
+                disabled_by_user: { type: "boolean", nullable: true },
+                last_seen_at: { type: "string", nullable: true },
+                expiration_time: { type: "string", nullable: true },
+                date_created: { type: "string", nullable: true },
+                date_updated: { type: "string", nullable: true },
+                user_agent: { type: "string", nullable: true },
+                fallback_channels: { type: "array", nullable: true, items: { type: "string" } },
+                notification_link: { type: "object", nullable: true, additionalProperties: true }
+              }
+            }
+          }
+        }
+      },
+      BrowserPushSubscriptionStatsRequest: {
+        allOf: [
+          { $ref: "#/components/schemas/BrowserPushSubscriptionBrowseRequest" },
+          {
+            type: "object",
+            properties: {
+              bucket: { type: "string", enum: ["hour", "day", "week"] }
+            }
+          }
+        ]
+      },
+      BrowserPushSubscriptionStatsResponse: {
+        type: "object",
+        required: ["ok", "stats"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          stats: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              total_records: { type: "integer" },
+              matching_records: { type: "integer" },
+              matching_records_exact: { type: "boolean" },
+              scanned_records: { type: "integer" },
+              scan_limit: { type: "integer" },
+              scan_truncated: { type: "boolean" },
+              unique_display_names: { type: "integer" },
+              unique_browser_installations: { type: "integer" },
+              unique_user_ids: { type: "integer" },
+              unique_user_emails: { type: "integer" },
+              status_counts: { type: "object", additionalProperties: { type: "integer" } },
+              permission_counts: { type: "object", additionalProperties: { type: "integer" } },
+              source_counts: { type: "object", additionalProperties: { type: "integer" } },
+              persistent_counts: {
+                type: "object",
+                additionalProperties: true,
+                properties: {
+                  persistent: { type: "integer" },
+                  non_persistent: { type: "integer" },
+                  unknown: { type: "integer" }
+                }
+              },
+              display_name_initial_counts: { type: "object", additionalProperties: { type: "integer" } },
+              date_buckets: { type: "object", additionalProperties: { type: "integer" } }
             }
           }
         }
@@ -348,6 +491,54 @@ export const openApiSpec = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionSearchResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/browse": {
+      post: {
+        operationId: "browseBrowserSubscriptions",
+        summary: "Browse browser Web Push subscriptions with bounded paging and Directus-backed filters.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionBrowseRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "A bounded page of browser push subscriptions and paging metadata.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushSubscriptionBrowseResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/stats": {
+      post: {
+        operationId: "getBrowserSubscriptionStats",
+        summary: "Read bounded aggregate stats for browser Web Push subscriptions.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionStatsRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push subscription table stats for the supplied filters.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushSubscriptionStatsResponse" }
               }
             }
           }
