@@ -1,10 +1,11 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { DirectusItemResponse, DirectusListResponse, directusJson, queryString } from "../lib/directus.js";
-import { asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "../lib/json.js";
+import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "../lib/json.js";
 import {
   NotificationContext,
   NotificationDeliveryAttemptInput,
+  NotificationDeliveryAttemptRecord,
   NotificationRecipientHint,
   NotificationRequestInput,
   NotificationRequestRecord,
@@ -354,6 +355,18 @@ function renderTemplateJson(value: unknown, parameters: JsonRecord): unknown {
   return value;
 }
 
+function deliveryDryRunRequested(input: NotificationRequestInput): boolean {
+  const metadata = asRecord(input.metadata) ?? {};
+  const data = asRecord(input.data) ?? {};
+  const runtimeCanary = asRecord(metadata.runtime_canary) ?? asRecord(metadata.canary);
+  return asBoolean(metadata.dry_run)
+    || asBoolean(metadata.dryRun)
+    || asBoolean(data.dry_run)
+    || asBoolean(data.dryRun)
+    || asBoolean(runtimeCanary?.dry_run)
+    || asBoolean(runtimeCanary?.dryRun);
+}
+
 function buildNotificationTemplateParameters(
   input: NotificationRequestInput,
   context: NotificationContext
@@ -396,7 +409,7 @@ function fallbackRenderedMessage(
     body,
     text: body,
     data: {},
-    options: {},
+    options: deliveryDryRunRequested(input) ? { dry_run: true } : {},
     parameters
   };
 }
@@ -428,6 +441,10 @@ async function renderNotificationMessage(
   const html = renderTemplateString(template.html_template, parameters);
   const data = asRecord(renderTemplateJson(template.data_template_json ?? {}, parameters)) ?? {};
   const options = asRecord(renderTemplateJson(template.options_template_json ?? {}, parameters)) ?? {};
+  const deliveryOptions = {
+    ...options,
+    ...(deliveryDryRunRequested(input) ? { dry_run: true } : {})
+  };
 
   return {
     ...input,
@@ -446,7 +463,7 @@ async function renderNotificationMessage(
       text,
       html,
       data: redactJsonRecord(data),
-      options: redactJsonRecord(options),
+      options: redactJsonRecord(deliveryOptions),
       parameters: redactJsonRecord(parameters),
       assets: template.assets_json ?? null,
       stylesheets: template.stylesheets_json ?? null
@@ -825,6 +842,35 @@ export async function createDeliveryAttempt(
     throw new Error("Directus did not return a delivery attempt id.");
   }
   return response.data;
+}
+
+export async function listDeliveryAttemptsForRequest(requestId: string): Promise<NotificationDeliveryAttemptRecord[]> {
+  const fields = [
+    "id",
+    "notification_request_id",
+    "channel",
+    "provider_key",
+    "recipient_json",
+    "message_json",
+    "status",
+    "provider_message_id",
+    "request_payload_json",
+    "response_json",
+    "error_message",
+    "attempted_at",
+    "finished_at",
+    "date_created",
+    "date_updated"
+  ].join(",");
+  const params = new URLSearchParams();
+  params.set("fields", fields);
+  params.set("filter[notification_request_id][_eq]", requestId);
+  params.set("sort", "attempted_at,date_created");
+  params.set("limit", "50");
+  const response = await directusJson<DirectusListResponse<NotificationDeliveryAttemptRecord>>(
+    `/items/${encodeURIComponent(config.notificationDeliveryCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
 }
 
 async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Promise<BrowserPushSubscriptionRecord | null> {

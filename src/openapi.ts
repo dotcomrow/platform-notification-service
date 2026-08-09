@@ -83,6 +83,39 @@ export const openApiSpec = {
         },
         additionalProperties: true
       },
+      NotificationCanaryRequest: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          channel: { type: "string", enum: ["in_app", "browser_push", "mobile_push", "email", "sms", "voice", "webhook"] },
+          dry_run: { type: "boolean", default: true },
+          send: { type: "boolean", default: false },
+          notification_key: { type: "string" },
+          recipient: { type: "object", additionalProperties: true },
+          recipient_address: { type: "string" },
+          parameters: { type: "object", additionalProperties: true },
+          metadata: { type: "object", additionalProperties: true },
+          timeout_ms: { type: "integer", minimum: 1000, maximum: 120000 },
+          poll_interval_ms: { type: "integer", minimum: 250, maximum: 5000 }
+        }
+      },
+      NotificationCanaryResponse: {
+        type: "object",
+        required: ["ok", "notification_request_id", "channel", "status"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          notification_request_id: { type: "string" },
+          channel: { type: "string" },
+          dry_run: { type: "boolean" },
+          dry_run_observed: { type: "boolean" },
+          status: { type: "string" },
+          reason: { type: "string" },
+          delivery_attempt_count: { type: "integer" },
+          channel_delivery_attempt_count: { type: "integer" },
+          delivery_attempts: { type: "array", items: { type: "object", additionalProperties: true } }
+        }
+      },
       NotificationStatusPatch: {
         type: "object",
         required: ["status"],
@@ -418,6 +451,46 @@ export const openApiSpec = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/NotificationRequestResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/canaries/notifications": {
+      post: {
+        operationId: "runNotificationCanary",
+        summary: "Queue a notification through Kafka and verify the NiFi delivery flow reaches a terminal result.",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/NotificationCanaryRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "The notification canary reached a successful terminal delivery result.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/NotificationCanaryResponse" }
+              }
+            }
+          },
+          "503": {
+            description: "The notification canary reached a failed terminal result.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/NotificationCanaryResponse" }
+              }
+            }
+          },
+          "504": {
+            description: "The notification canary timed out before a terminal result was observed.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/NotificationCanaryResponse" }
               }
             }
           }

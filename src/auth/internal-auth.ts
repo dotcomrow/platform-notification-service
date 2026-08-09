@@ -35,7 +35,8 @@ function allowsBrowserSubscriptionSearchTrustedTokens(req: Request): boolean {
 }
 
 function allowsNotificationIntakeTrustedTokens(req: Request): boolean {
-  return req.method.toUpperCase() === "POST" && req.path === "/internal/notifications";
+  return req.method.toUpperCase() === "POST"
+    && (req.path === "/internal/notifications" || req.path === "/internal/canaries/notifications");
 }
 
 async function trustedVaultClientTokens(

@@ -68,6 +68,7 @@ spec:
               VAULT_TOKEN="$(cat /vault-token/VAULT_TOKEN)"
               SECRET_PATH="secret/data/platform-notification-service"
               DEPLOY_SERVICE_CLIENT_PATH="secret/data/platform-notification-service/clients/platform-deploy-service"
+              RUNTIME_STATUS_CLIENT_PATH="secret/data/platform-notification-service/clients/runtime-status-service"
               GRAPHQL_API_CLIENT_ID_PATH="secret/data/keycloak-client-id-graphql-api"
 
               graphql_client_code="$(curl -sS -o /tmp/graphql-api-client-id.json -w '%{http_code}' \
@@ -239,6 +240,33 @@ spec:
                 fi
               fi
 
+              runtime_client_code="$(curl -sS -o /tmp/runtime-status-client-secret.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/${RUNTIME_STATUS_CLIENT_PATH}" || true)"
+              if [ "${runtime_client_code}" = "200" ]; then
+                runtime_client_token="$(jq -r '.data.data.token // empty' /tmp/runtime-status-client-secret.json)"
+                existing_runtime_client_data="$(jq -c '.data.data // {}' /tmp/runtime-status-client-secret.json)"
+              else
+                runtime_client_token=""
+                existing_runtime_client_data="{}"
+              fi
+
+              if [ -z "${runtime_client_token}" ] || [ "${runtime_client_token}" = "null" ]; then
+                runtime_client_token="$(openssl rand -base64 48 | tr -d '\n' | tr '/+' '._')"
+                runtime_client_payload="$(jq -nc --arg token "${runtime_client_token}" --argjson existing "${existing_runtime_client_data}" '{data:($existing + {token:$token})}')"
+                runtime_client_write_code="$(curl -sS -o /tmp/runtime-status-client-secret-write.json -w '%{http_code}' \
+                  -X POST \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "${runtime_client_payload}" \
+                  "${VAULT_ADDR}/v1/${RUNTIME_STATUS_CLIENT_PATH}" || true)"
+                if [ "${runtime_client_write_code}" != "200" ] && [ "${runtime_client_write_code}" != "204" ]; then
+                  echo "Failed to write ${RUNTIME_STATUS_CLIENT_PATH} to Vault (HTTP ${runtime_client_write_code})."
+                  cat /tmp/runtime-status-client-secret-write.json || true
+                  exit 1
+                fi
+              fi
+
               echo "Platform notification service Vault configuration is ready."
 ---
 apiVersion: v1
@@ -351,7 +379,7 @@ spec:
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS
-              value: "platform-deploy-service"
+              value: "platform-deploy-service,runtime-status-service"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/platform-notification-service/clients"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY

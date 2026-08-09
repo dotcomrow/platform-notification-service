@@ -1,4 +1,5 @@
 import express, { NextFunction, Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
@@ -7,7 +8,7 @@ import { config } from "./config.js";
 import { enforceInternalAuth } from "./auth/internal-auth.js";
 import { directusHealth } from "./lib/directus.js";
 import { kafkaReady, publishJson } from "./lib/kafka.js";
-import { asRecord, JsonRecord, redactJsonRecord, truncate } from "./lib/json.js";
+import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "./lib/json.js";
 import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
@@ -17,6 +18,7 @@ import {
   browseBrowserPushSubscriptions,
   enrichNotificationRequest,
   findRequestByIdempotencyKey,
+  listDeliveryAttemptsForRequest,
   getBrowserPushSubscriptionStats,
   getBrowserPushSubscription,
   getNotificationRequest,
@@ -38,6 +40,13 @@ import {
   parseNotificationRequest,
   parseNotificationStatusPatch
 } from "./notifications/validation.js";
+import {
+  NotificationChannel,
+  NotificationDeliveryAttemptRecord,
+  NotificationRecipientHint,
+  NotificationRequestInput,
+  NotificationRequestRecord
+} from "./notifications/types.js";
 
 const app = express();
 app.set("trust proxy", config.trustProxyHops);
@@ -67,6 +76,13 @@ function notificationQueuedPayload(recordId: string, duplicate: boolean, status:
   };
 }
 
+type NotificationQueueResult = {
+  record_id: string;
+  duplicate: boolean;
+  status: string;
+  correlation_id?: string | null;
+};
+
 function isNotificationRequestIdempotencyConflict(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -95,30 +111,33 @@ async function findRequestByIdempotencyKeyWithRetry(source: string, idempotencyK
   return null;
 }
 
-function respondWithDuplicateRequest(res: Response, existing: Awaited<ReturnType<typeof findRequestByIdempotencyKey>>): boolean {
+function duplicateQueueResult(existing: Awaited<ReturnType<typeof findRequestByIdempotencyKey>>): NotificationQueueResult | null {
   if (!existing) {
-    return false;
+    return null;
   }
-  res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
-  return true;
+  return {
+    record_id: existing.id,
+    duplicate: true,
+    status: existing.status,
+    correlation_id: existing.correlation_id
+  };
 }
 
-async function queueNotification(req: Request, res: Response): Promise<void> {
-  await enforceInternalAuth(req);
-  const parsedInput = parseNotificationRequest(req.body);
-
+async function queueNotificationInput(parsedInput: NotificationRequestInput): Promise<NotificationQueueResult> {
   if (parsedInput.idempotency_key) {
     const existing = await findRequestByIdempotencyKey(parsedInput.source, parsedInput.idempotency_key);
-    if (respondWithDuplicateRequest(res, existing)) {
-      return;
+    const duplicate = duplicateQueueResult(existing);
+    if (duplicate) {
+      return duplicate;
     }
   }
 
   const { input, context } = await enrichNotificationRequest(parsedInput);
   if (input.idempotency_key) {
     const existing = await findRequestByIdempotencyKey(input.source, input.idempotency_key);
-    if (respondWithDuplicateRequest(res, existing)) {
-      return;
+    const duplicate = duplicateQueueResult(existing);
+    if (duplicate) {
+      return duplicate;
     }
   }
 
@@ -128,8 +147,9 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
   } catch (error) {
     if (input.idempotency_key && isNotificationRequestIdempotencyConflict(error)) {
       const existing = await findRequestByIdempotencyKeyWithRetry(input.source, input.idempotency_key);
-      if (respondWithDuplicateRequest(res, existing)) {
-        return;
+      const duplicate = duplicateQueueResult(existing);
+      if (duplicate) {
+        return duplicate;
       }
     }
     throw error;
@@ -173,7 +193,20 @@ async function queueNotification(req: Request, res: Response): Promise<void> {
     throw error;
   }
 
-  res.status(202).json(notificationQueuedPayload(requestRecord.id, false, "queued", input.correlation_id));
+  return {
+    record_id: requestRecord.id,
+    duplicate: false,
+    status: "queued",
+    correlation_id: input.correlation_id
+  };
+}
+
+async function queueNotification(req: Request, res: Response): Promise<void> {
+  await enforceInternalAuth(req);
+  const result = await queueNotificationInput(parseNotificationRequest(req.body));
+  res.status(result.duplicate ? 200 : 202).json(
+    notificationQueuedPayload(result.record_id, result.duplicate, result.status, result.correlation_id)
+  );
 }
 
 async function resolveBrowserPushPublicKey(): Promise<string> {
@@ -224,6 +257,233 @@ function scheduleBrowserSubscriptionCleanup(): void {
   intervalTimer.unref?.();
 }
 
+const NOTIFICATION_CANARY_CHANNELS: NotificationChannel[] = ["browser_push", "email", "sms", "mobile_push", "voice", "webhook", "in_app"];
+const NOTIFICATION_TERMINAL_STATUSES = new Set(["sent", "partially_sent", "failed", "canceled"]);
+
+function parseCanaryChannel(value: unknown): NotificationChannel {
+  const channel = asString(value, "browser_push").replace(/-/g, "_") as NotificationChannel;
+  if (!NOTIFICATION_CANARY_CHANNELS.includes(channel)) {
+    throw Object.assign(new Error(`Unsupported notification canary channel '${channel}'.`), { status: 422 });
+  }
+  return channel;
+}
+
+function notificationCanaryTemplateKey(channel: NotificationChannel): string {
+  return `platform.notification.canary.${channel.replace(/_/g, "-")}`;
+}
+
+function canaryRecipient(channel: NotificationChannel, body: JsonRecord): NotificationRecipientHint {
+  const configured = asRecord(body.recipient);
+  if (configured) {
+    return configured as NotificationRecipientHint;
+  }
+
+  const recipientAddress = asString(body.recipient_address) || asString(body.address);
+  if (channel === "email") {
+    return {
+      type: "email",
+      address: recipientAddress || "runtime-canary@example.invalid",
+      channels: [channel],
+      data: { notification_canary: true }
+    };
+  }
+  if (channel === "browser_push") {
+    return {
+      type: "browser_subscription",
+      id: asString(body.browser_subscription_id) || "runtime-canary-browser-subscription",
+      channels: [channel],
+      data: {
+        notification_canary: true,
+        browser_subscription_id: asString(body.browser_subscription_id) || "runtime-canary-browser-subscription"
+      }
+    };
+  }
+  if (channel === "sms" || channel === "voice") {
+    return {
+      type: "phone",
+      address: recipientAddress || "+15555550100",
+      channels: [channel],
+      data: { notification_canary: true }
+    };
+  }
+  if (channel === "webhook") {
+    return {
+      type: "webhook",
+      address: recipientAddress || "https://runtime-canary.invalid/notifications",
+      channels: [channel],
+      data: { notification_canary: true }
+    };
+  }
+  if (channel === "mobile_push") {
+    return {
+      type: "user",
+      id: asString(body.user_id) || "runtime-canary-mobile-user",
+      channels: [channel],
+      data: { notification_canary: true, mobile_installation_id: "runtime-canary-mobile-installation" }
+    };
+  }
+  return {
+    type: "topic",
+    id: asString(body.topic) || "runtime-canary",
+    channels: [channel],
+    data: { notification_canary: true }
+  };
+}
+
+function buildNotificationCanaryInput(body: JsonRecord): { channel: NotificationChannel; dryRun: boolean; input: NotificationRequestInput } {
+  const channel = parseCanaryChannel(body.channel);
+  const dryRun = Object.hasOwn(body, "dry_run")
+    ? asBoolean(body.dry_run, true)
+    : !asBoolean(body.send, false);
+  const now = new Date().toISOString();
+  const correlationId = asString(body.correlation_id) || `runtime-notification-canary:${channel}:${randomUUID()}`;
+  const parameters = {
+    channel,
+    channel_label: channel.replace(/_/g, " "),
+    correlation_id: correlationId,
+    dry_run: dryRun,
+    requested_at: now,
+    ...(asRecord(body.parameters) ?? {})
+  };
+  const metadata = {
+    ...(asRecord(body.metadata) ?? {}),
+    runtime_canary: {
+      enabled: true,
+      channel,
+      dry_run: dryRun
+    },
+    dry_run: dryRun,
+    source: "runtime-status-canary",
+    purpose: "notification_nifi_flow_canary"
+  };
+  return {
+    channel,
+    dryRun,
+    input: {
+      event_key: asString(body.event_key) || `platform.notification.canary.${channel}`,
+      source: asString(body.source, "runtime-status-canary"),
+      severity: "info",
+      priority: "normal",
+      notification_key: asString(body.notification_key) || notificationCanaryTemplateKey(channel),
+      channels: [channel],
+      recipients: [canaryRecipient(channel, body)],
+      parameters,
+      data: {
+        notification_canary: true,
+        channel,
+        dry_run: dryRun,
+        requested_at: now,
+        ...(asRecord(body.data) ?? {})
+      },
+      metadata,
+      correlation_id: correlationId,
+      idempotency_key: asString(body.idempotency_key) || undefined
+    }
+  };
+}
+
+function deliveryAttemptObservedDryRun(attempt: NotificationDeliveryAttemptRecord): boolean {
+  const response = asRecord(attempt.response_json) ?? {};
+  const executorResponse = asRecord(response.executor_response) ?? {};
+  return asString(response.mode).toLowerCase() === "dry_run"
+    || asString(executorResponse.mode).toLowerCase() === "dry_run"
+    || asBoolean(response.dry_run)
+    || asBoolean(executorResponse.dry_run);
+}
+
+function summarizeCanaryAttempt(attempt: NotificationDeliveryAttemptRecord): JsonRecord {
+  return {
+    id: attempt.id,
+    channel: attempt.channel,
+    provider_key: attempt.provider_key || null,
+    status: attempt.status,
+    provider_message_id: attempt.provider_message_id || null,
+    dry_run_observed: deliveryAttemptObservedDryRun(attempt),
+    error_message: attempt.error_message || null,
+    attempted_at: attempt.attempted_at || null,
+    finished_at: attempt.finished_at || null,
+    response_json: attempt.response_json ?? {}
+  };
+}
+
+async function waitForNotificationCanaryResult(
+  requestId: string,
+  channel: NotificationChannel,
+  dryRun: boolean,
+  timeoutMs: number,
+  pollIntervalMs: number
+): Promise<JsonRecord & { ok: boolean; http_status: number }> {
+  const started = Date.now();
+  let requestRecord: NotificationRequestRecord | null = null;
+  let attempts: NotificationDeliveryAttemptRecord[] = [];
+  let pollCount = 0;
+
+  do {
+    pollCount += 1;
+    requestRecord = await getNotificationRequest(requestId);
+    attempts = await listDeliveryAttemptsForRequest(requestId);
+    if (NOTIFICATION_TERMINAL_STATUSES.has(asString(requestRecord.status))) {
+      break;
+    }
+    await wait(pollIntervalMs);
+  } while (Date.now() - started < timeoutMs);
+
+  const elapsedMs = Date.now() - started;
+  const channelAttempts = attempts.filter((attempt) => attempt.channel === channel);
+  const sentAttempt = channelAttempts.find((attempt) => attempt.status === "sent");
+  const terminalStatus = asString(requestRecord?.status);
+  const terminal = NOTIFICATION_TERMINAL_STATUSES.has(terminalStatus);
+  const dryRunObserved = !dryRun || channelAttempts.some(deliveryAttemptObservedDryRun);
+  const ok = terminal
+    && (terminalStatus === "sent" || terminalStatus === "partially_sent")
+    && Boolean(sentAttempt)
+    && dryRunObserved;
+
+  return {
+    ok,
+    http_status: ok ? 200 : terminal ? 503 : 504,
+    notification_request_id: requestId,
+    channel,
+    dry_run: dryRun,
+    dry_run_observed: dryRunObserved,
+    elapsed_ms: elapsedMs,
+    poll_count: pollCount,
+    terminal,
+    status: terminalStatus || "unknown",
+    last_message: requestRecord?.last_message || null,
+    error_message: requestRecord?.error_message || null,
+    queued_at: requestRecord?.queued_at || null,
+    started_at: requestRecord?.started_at || null,
+    finished_at: requestRecord?.finished_at || null,
+    delivery_attempt_count: attempts.length,
+    channel_delivery_attempt_count: channelAttempts.length,
+    delivery_attempts: channelAttempts.map(summarizeCanaryAttempt),
+    reason: ok
+      ? "notification_canary_succeeded"
+      : !terminal
+        ? "notification_canary_timed_out"
+        : !sentAttempt
+          ? "notification_canary_missing_sent_delivery_attempt"
+          : "notification_canary_dry_run_not_observed"
+  };
+}
+
+async function runNotificationCanary(req: Request, res: Response): Promise<void> {
+  await enforceInternalAuth(req);
+  const body = asRecord(req.body) ?? {};
+  const { channel, dryRun, input } = buildNotificationCanaryInput(body);
+  const timeoutMs = Math.max(1000, Math.min(120_000, Number(body.timeout_ms) || 45_000));
+  const pollIntervalMs = Math.max(250, Math.min(5000, Number(body.poll_interval_ms) || 1000));
+  const queued = await queueNotificationInput(input);
+  const result = await waitForNotificationCanaryResult(queued.record_id, channel, dryRun, timeoutMs, pollIntervalMs);
+  res.status(result.http_status).json({
+    ...result,
+    duplicate: queued.duplicate,
+    correlation_id: input.correlation_id,
+    notification_key: input.notification_key || null
+  });
+}
+
 app.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "platform-notification-service", version: "1.0.0" });
 });
@@ -250,6 +510,14 @@ app.get("/openapi.json", (_req, res) => {
 app.post("/internal/notifications", async (req, res, next) => {
   try {
     await queueNotification(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/canaries/notifications", async (req, res, next) => {
+  try {
+    await runNotificationCanary(req, res);
   } catch (error) {
     next(error);
   }

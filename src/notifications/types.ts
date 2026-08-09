@@ -154,6 +154,15 @@ export type NotificationDeliveryAttemptInput = {
   error_message?: string;
 };
 
+export type NotificationDeliveryAttemptRecord = NotificationDeliveryAttemptInput & {
+  id: string;
+  notification_request_id?: string | NotificationRequestRecord | null;
+  attempted_at?: string | null;
+  finished_at?: string | null;
+  date_created?: string | null;
+  date_updated?: string | null;
+};
+
 export type BrowserNotificationFallbackChannel = "email" | "sms";
 
 export type BrowserPushSubscriptionInput = {
