@@ -65,11 +65,11 @@ app.use(rateLimit({
     || req.path.startsWith("/internal/")
 }));
 
-function notificationQueuedPayload(recordId: string, duplicate: boolean, status: string, correlationId?: string | null) {
+function notificationQueuedPayload(recordId: string | null | undefined, duplicate: boolean, status: string, correlationId?: string | null) {
   return {
     ok: true,
     duplicate,
-    notification_request_id: recordId,
+    notification_request_id: recordId || null,
     status,
     correlation_id: correlationId || null,
     queue_topic: config.notificationRequestedTopic
@@ -77,7 +77,7 @@ function notificationQueuedPayload(recordId: string, duplicate: boolean, status:
 }
 
 type NotificationQueueResult = {
-  record_id: string;
+  record_id?: string | null;
   duplicate: boolean;
   status: string;
   correlation_id?: string | null;
@@ -151,6 +151,12 @@ async function queueNotificationInput(parsedInput: NotificationRequestInput): Pr
       if (duplicate) {
         return duplicate;
       }
+      return {
+        record_id: null,
+        duplicate: true,
+        status: "queued",
+        correlation_id: input.correlation_id
+      };
     }
     throw error;
   }
@@ -475,6 +481,19 @@ async function runNotificationCanary(req: Request, res: Response): Promise<void>
   const timeoutMs = Math.max(1000, Math.min(120_000, Number(body.timeout_ms) || 45_000));
   const pollIntervalMs = Math.max(250, Math.min(5000, Number(body.poll_interval_ms) || 1000));
   const queued = await queueNotificationInput(input);
+  if (!queued.record_id) {
+    res.status(200).json({
+      ...notificationQueuedPayload(null, queued.duplicate, queued.status, queued.correlation_id),
+      channel,
+      dry_run: dryRun,
+      terminal: false,
+      delivery_attempt_count: 0,
+      channel_delivery_attempt_count: 0,
+      delivery_attempts: [],
+      reason: "notification_canary_duplicate_request_not_readable_yet"
+    });
+    return;
+  }
   const result = await waitForNotificationCanaryResult(queued.record_id, channel, dryRun, timeoutMs, pollIntervalMs);
   res.status(result.http_status).json({
     ...result,

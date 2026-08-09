@@ -629,6 +629,7 @@ export async function findRequestByIdempotencyKey(source: string, idempotencyKey
   params.set("filter[idempotency_key][_eq]", idempotencyKey);
   params.set("sort", "-requested_at,-date_created");
   params.set("limit", "1");
+  params.set("_cb", randomUUID());
   const response = await directusJson<DirectusListResponse<NotificationRequestRecord>>(
     `/items/${encodeURIComponent(config.notificationRequestCollection)}?${params.toString()}`
   );
