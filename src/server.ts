@@ -82,7 +82,7 @@ function wait(ms: number): Promise<void> {
 }
 
 async function findRequestByIdempotencyKeyWithRetry(source: string, idempotencyKey: string) {
-  const delays = [0, 100, 250, 500, 1000];
+  const delays = [0, 100, 250, 500, 1000, 2000, 5000];
   for (const delay of delays) {
     if (delay > 0) {
       await wait(delay);
@@ -95,27 +95,40 @@ async function findRequestByIdempotencyKeyWithRetry(source: string, idempotencyK
   return null;
 }
 
+function respondWithDuplicateRequest(res: Response, existing: Awaited<ReturnType<typeof findRequestByIdempotencyKey>>): boolean {
+  if (!existing) {
+    return false;
+  }
+  res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
+  return true;
+}
+
 async function queueNotification(req: Request, res: Response): Promise<void> {
   await enforceInternalAuth(req);
   const parsedInput = parseNotificationRequest(req.body);
 
   if (parsedInput.idempotency_key) {
     const existing = await findRequestByIdempotencyKey(parsedInput.source, parsedInput.idempotency_key);
-    if (existing) {
-      res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
+    if (respondWithDuplicateRequest(res, existing)) {
       return;
     }
   }
 
   const { input, context } = await enrichNotificationRequest(parsedInput);
+  if (input.idempotency_key) {
+    const existing = await findRequestByIdempotencyKey(input.source, input.idempotency_key);
+    if (respondWithDuplicateRequest(res, existing)) {
+      return;
+    }
+  }
+
   let requestRecord;
   try {
     requestRecord = await createNotificationRequest(input, context);
   } catch (error) {
     if (input.idempotency_key && isNotificationRequestIdempotencyConflict(error)) {
       const existing = await findRequestByIdempotencyKeyWithRetry(input.source, input.idempotency_key);
-      if (existing) {
-        res.status(200).json(notificationQueuedPayload(existing.id, true, existing.status, existing.correlation_id));
+      if (respondWithDuplicateRequest(res, existing)) {
         return;
       }
     }
