@@ -97,14 +97,16 @@ function assertBrowserSubscriptionMatchesInstallation(
 
 function browserSubscriptionMetadata(
   input: BrowserPushSubscriptionInput,
-  existing?: BrowserPushSubscriptionRecord | null
+  existing?: BrowserPushSubscriptionRecord | null,
+  options: { preserveExistingProof?: boolean } = {}
 ): JsonRecord {
   const metadata = redactJsonRecord(input.metadata ?? {});
   delete metadata.browser_link_proof_hash;
   delete metadata.browser_link_proof_version;
   const storedProofHash = browserSubscriptionStoredProofHash(existing);
   const suppliedSecret = asString(input.browser_subscription_client_secret);
-  const proofHash = storedProofHash || (suppliedSecret ? browserSubscriptionProofHash(suppliedSecret) : "");
+  const preserveExistingProof = options.preserveExistingProof !== false;
+  const proofHash = (preserveExistingProof ? storedProofHash : "") || (suppliedSecret ? browserSubscriptionProofHash(suppliedSecret) : "");
   return {
     ...metadata,
     ...(proofHash ? {
@@ -159,6 +161,16 @@ function addDirectusReadCacheBust(params: URLSearchParams): void {
 }
 
 const browserSubscriptionUpsertLocks = new Map<string, Promise<BrowserPushSubscriptionRecord>>();
+const CURRENT_BROWSER_SUBSCRIPTION_STATUSES = new Set(["active", "fallback", "missing_subscription", "disabled", "inactive"]);
+
+type BrowserSubscriptionPersistentIdentity = {
+  source: string;
+  organization_id: string;
+  app_id: string;
+  user_field: "user_id" | "user_email";
+  user_value: string;
+  display_name: string;
+};
 
 async function withBrowserSubscriptionUpsertLock(
   keys: string[],
@@ -190,11 +202,15 @@ async function withBrowserSubscriptionUpsertLock(
 function browserSubscriptionUpsertLockKeys(input: BrowserPushSubscriptionInput): string[] {
   const keys: string[] = [];
   const endpoint = input.subscription?.endpoint;
+  const identity = browserSubscriptionPersistentIdentityFromInput(input);
   if (input.browser_installation_id) {
     keys.push(`installation:${input.browser_installation_id}`);
   }
   if (endpoint) {
     keys.push(`endpoint:${sha256(endpoint)}`);
+  }
+  if (identity) {
+    keys.push(`identity:${persistentIdentityKey(identity)}`);
   }
   return keys.length ? keys : [`source:${input.source}`];
 }
@@ -874,9 +890,28 @@ export async function listDeliveryAttemptsForRequest(requestId: string): Promise
   return response.data ?? [];
 }
 
+const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
+  "id",
+  "source",
+  "browser_installation_id",
+  "endpoint_hash",
+  "status",
+  "user_id",
+  "user_email",
+  "organization_id",
+  "app_id",
+  "permission",
+  "fallback_channels_json",
+  "last_seen_at",
+  "date_created",
+  "date_updated",
+  "metadata_json",
+  "capabilities_json"
+].join(",");
+
 async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
   params.set("filter[endpoint_hash][_eq]", endpointHash);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "1");
@@ -889,7 +924,7 @@ async function findBrowserSubscriptionByEndpointHash(endpointHash: string): Prom
 
 async function findBrowserSubscriptionById(id: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
   params.set("filter[id][_eq]", id);
   params.set("limit", "1");
   addDirectusReadCacheBust(params);
@@ -897,6 +932,43 @@ async function findBrowserSubscriptionById(id: string): Promise<BrowserPushSubsc
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
   return response.data?.[0] ?? null;
+}
+
+async function listBrowserSubscriptionsForPersistentIdentity(
+  identity: BrowserSubscriptionPersistentIdentity,
+  limit = 100
+): Promise<BrowserPushSubscriptionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+  if (identity.source) {
+    params.set("filter[source][_eq]", identity.source);
+  }
+  if (identity.organization_id) {
+    params.set("filter[organization_id][_eq]", identity.organization_id);
+  }
+  if (identity.app_id) {
+    params.set("filter[app_id][_eq]", identity.app_id);
+  }
+  params.set(`filter[${identity.user_field}][_eq]`, identity.user_value);
+  params.set("sort", "-last_seen_at,-date_updated,-date_created");
+  params.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return (response.data ?? [])
+    .filter(isCurrentBrowserSubscriptionState)
+    .filter((record) => browserSubscriptionPersistentIdentityMatches(record, identity));
+}
+
+async function findBrowserSubscriptionByPersistentIdentity(
+  input: BrowserPushSubscriptionInput
+): Promise<BrowserPushSubscriptionRecord | null> {
+  const identity = browserSubscriptionPersistentIdentityFromInput(input);
+  if (!identity) {
+    return null;
+  }
+  return preferredBrowserSubscriptionRecord(await listBrowserSubscriptionsForPersistentIdentity(identity, 25));
 }
 
 function browserSubscriptionTime(record: BrowserPushSubscriptionRecord): number {
@@ -983,6 +1055,88 @@ function browserSubscriptionDisplayName(record: BrowserPushSubscriptionRecord): 
     asString(capabilityLink?.display_name) ||
     asString(record.user_email) ||
     asString(record.user_id);
+}
+
+function normalizedIdentityPart(value: unknown): string {
+  return asString(value).trim().toLowerCase();
+}
+
+function browserSubscriptionInputNotificationLink(input: BrowserPushSubscriptionInput): JsonRecord | null {
+  const metadata = asRecord(input.metadata);
+  const capabilities = asRecord(input.capabilities);
+  return asRecord(metadata?.notification_link) ?? asRecord(capabilities?.notification_link);
+}
+
+function browserSubscriptionInputPersistent(input: BrowserPushSubscriptionInput): boolean {
+  return browserSubscriptionInputNotificationLink(input)?.persistent === true;
+}
+
+function browserSubscriptionInputDisplayName(input: BrowserPushSubscriptionInput): string {
+  const link = browserSubscriptionInputNotificationLink(input);
+  return asString(link?.display_name) || asString(input.user_email) || asString(input.user_id);
+}
+
+function browserSubscriptionPersistentIdentityFromInput(
+  input: BrowserPushSubscriptionInput
+): BrowserSubscriptionPersistentIdentity | null {
+  if (!browserSubscriptionInputPersistent(input)) {
+    return null;
+  }
+  const displayName = normalizedIdentityPart(browserSubscriptionInputDisplayName(input));
+  const userId = asString(input.user_id);
+  const userEmail = normalizedIdentityPart(input.user_email);
+  if (!displayName || (!userId && !userEmail)) {
+    return null;
+  }
+  return {
+    source: asString(input.source),
+    organization_id: asString(input.organization_id),
+    app_id: asString(input.app_id),
+    user_field: userId ? "user_id" : "user_email",
+    user_value: userId || userEmail,
+    display_name: displayName
+  };
+}
+
+function browserSubscriptionPersistentIdentityFromRecord(
+  record: BrowserPushSubscriptionRecord
+): BrowserSubscriptionPersistentIdentity | null {
+  if (!isPersistentBrowserSubscription(record)) {
+    return null;
+  }
+  const displayName = normalizedIdentityPart(browserSubscriptionDisplayName(record));
+  const userId = asString(record.user_id);
+  const userEmail = normalizedIdentityPart(record.user_email);
+  if (!displayName || (!userId && !userEmail)) {
+    return null;
+  }
+  return {
+    source: asString(record.source),
+    organization_id: idFromRelation(record.organization_id),
+    app_id: idFromRelation(record.app_id),
+    user_field: userId ? "user_id" : "user_email",
+    user_value: userId || userEmail,
+    display_name: displayName
+  };
+}
+
+function persistentIdentityKey(identity: BrowserSubscriptionPersistentIdentity): string {
+  return [
+    identity.source,
+    identity.organization_id,
+    identity.app_id,
+    identity.user_field,
+    identity.user_value,
+    identity.display_name
+  ].join("|");
+}
+
+function browserSubscriptionPersistentIdentityMatches(
+  record: BrowserPushSubscriptionRecord,
+  identity: BrowserSubscriptionPersistentIdentity
+): boolean {
+  const recordIdentity = browserSubscriptionPersistentIdentityFromRecord(record);
+  return Boolean(recordIdentity && persistentIdentityKey(recordIdentity) === persistentIdentityKey(identity));
 }
 
 function searchHaystack(record: BrowserPushSubscriptionRecord, field: string): string[] {
@@ -1504,7 +1658,7 @@ export async function getBrowserPushSubscriptionStats(
 
 async function findBrowserSubscriptionByInstallationId(browserInstallationId: string): Promise<BrowserPushSubscriptionRecord | null> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,metadata_json");
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", "25");
@@ -1640,8 +1794,13 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
   const byInstallation = !byId && !byEndpoint && input.browser_installation_id
     ? await findBrowserSubscriptionByInstallationId(input.browser_installation_id)
     : null;
+  const byIdentity = !byId && !byEndpoint && !byInstallation
+    ? await findBrowserSubscriptionByPersistentIdentity(input)
+    : null;
   const existing = byId ?? byEndpoint ??
-    (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
+    (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null) ??
+    byIdentity;
+  const existingFromPersistentIdentity = Boolean(byIdentity?.id && existing?.id === byIdentity.id);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -1660,7 +1819,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     capabilities_json: redactJsonRecord(input.capabilities),
     fallback_channels_json: input.fallback_channels,
     user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
-    metadata_json: browserSubscriptionMetadata(input, existing),
+    metadata_json: browserSubscriptionMetadata(input, existing, { preserveExistingProof: !existingFromPersistentIdentity }),
     status: input.permission === "granted" ? "active" : "disabled",
     last_seen_at: now
   };
@@ -1745,16 +1904,12 @@ async function listStaleBrowserSubscriptions(cutoff: string, limit: number): Pro
 
 function isCurrentBrowserSubscriptionState(record: BrowserPushSubscriptionRecord): boolean {
   const status = asString(record.status).toLowerCase();
-  return status === "active"
-    || status === "fallback"
-    || status === "missing_subscription"
-    || status === "disabled"
-    || status === "inactive";
+  return CURRENT_BROWSER_SUBSCRIPTION_STATUSES.has(status);
 }
 
 async function listBrowserSubscriptionsForDedupe(limit: number): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
   params.set("sort", "browser_installation_id,-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(limit));
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
@@ -1768,7 +1923,7 @@ async function listBrowserSubscriptionsForInstallation(
   limit = 100
 ): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,status,browser_installation_id,endpoint_hash,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
   params.set("filter[browser_installation_id][_eq]", browserInstallationId);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
@@ -1781,17 +1936,52 @@ async function listBrowserSubscriptionsForInstallation(
 
 async function supersedeOtherBrowserSubscriptions(current: BrowserPushSubscriptionRecord): Promise<void> {
   const browserInstallationId = asString(current.browser_installation_id);
-  if (!current.id || !browserInstallationId) {
+  if (!current.id) {
     return;
   }
 
-  const duplicates = (await listBrowserSubscriptionsForInstallation(browserInstallationId))
-    .filter((record) => record.id && record.id !== current.id);
-  await markLifecycleRows(duplicates, {
-    status: "superseded",
-    reason: "browser_installation_id_replaced",
-    message: "A newer browser subscription state replaced this browser installation record."
-  }, false);
+  const collectRecords = async (): Promise<BrowserPushSubscriptionRecord[]> => {
+    const recordsById = new Map<string, BrowserPushSubscriptionRecord>();
+    const addRecords = (records: BrowserPushSubscriptionRecord[]) => {
+      for (const record of records) {
+        if (record.id) {
+          recordsById.set(record.id, record);
+        }
+      }
+    };
+
+    addRecords([current]);
+    if (browserInstallationId) {
+      addRecords(await listBrowserSubscriptionsForInstallation(browserInstallationId));
+    }
+    const identity = browserSubscriptionPersistentIdentityFromRecord(current);
+    if (identity) {
+      addRecords(await listBrowserSubscriptionsForPersistentIdentity(identity));
+    }
+    return [...recordsById.values()].filter(isCurrentBrowserSubscriptionState);
+  };
+
+  for (const delay of [0, 100, 300]) {
+    if (delay > 0) {
+      await wait(delay);
+    }
+    const records = await collectRecords();
+    const selected = preferredBrowserSubscriptionRecord(records);
+    if (!selected?.id) {
+      continue;
+    }
+
+    const duplicates = records.filter((record) => record.id && record.id !== selected.id);
+    if (duplicates.length === 0) {
+      continue;
+    }
+    await markLifecycleRows(duplicates, {
+      status: "superseded",
+      reason: "browser_subscription_identity_replaced",
+      message: "A better browser subscription state replaced this browser installation or persistent identity record."
+    }, false);
+    return;
+  }
 }
 
 function newerBrowserSubscription(left: BrowserPushSubscriptionRecord, right: BrowserPushSubscriptionRecord): BrowserPushSubscriptionRecord {
@@ -1809,23 +1999,49 @@ function newerBrowserSubscription(left: BrowserPushSubscriptionRecord, right: Br
 }
 
 function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]): BrowserPushSubscriptionRecord[] {
-  const latestByInstallation = new Map<string, BrowserPushSubscriptionRecord>();
+  const latestByGroup = new Map<string, BrowserPushSubscriptionRecord>();
   for (const record of records.filter(isCurrentBrowserSubscriptionState)) {
     const installationId = asString(record.browser_installation_id);
-    if (!installationId || !record.id) {
+    if (!record.id) {
       continue;
     }
-    const existing = latestByInstallation.get(installationId);
-    latestByInstallation.set(installationId, existing ? newerBrowserSubscription(existing, record) : record);
+    const groupKeys: string[] = [];
+    if (installationId) {
+      groupKeys.push(`installation:${installationId}`);
+    }
+    const identity = browserSubscriptionPersistentIdentityFromRecord(record);
+    if (identity) {
+      groupKeys.push(`identity:${persistentIdentityKey(identity)}`);
+    }
+    for (const groupKey of groupKeys) {
+      const existing = latestByGroup.get(groupKey);
+      latestByGroup.set(groupKey, existing ? newerBrowserSubscription(existing, record) : record);
+    }
   }
 
+  const supersededIds = new Set<string>();
   return records.filter((record) => {
     if (!isCurrentBrowserSubscriptionState(record)) {
       return false;
     }
     const installationId = asString(record.browser_installation_id);
-    const latest = installationId ? latestByInstallation.get(installationId) : null;
-    return Boolean(latest?.id && record.id && latest.id !== record.id);
+    const groupKeys: string[] = [];
+    if (installationId) {
+      groupKeys.push(`installation:${installationId}`);
+    }
+    const identity = browserSubscriptionPersistentIdentityFromRecord(record);
+    if (identity) {
+      groupKeys.push(`identity:${persistentIdentityKey(identity)}`);
+    }
+    const shouldSupersede = groupKeys.some((groupKey) => {
+      const latest = latestByGroup.get(groupKey);
+      return Boolean(latest?.id && record.id && latest.id !== record.id);
+    });
+    if (shouldSupersede && record.id && !supersededIds.has(record.id)) {
+      supersededIds.add(record.id);
+      return true;
+    }
+    return false;
   });
 }
 
