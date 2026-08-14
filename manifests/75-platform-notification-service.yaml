@@ -360,6 +360,18 @@ spec:
               value: "90"
             - name: BROWSER_SUBSCRIPTION_CLEANUP_LIMIT
               value: "500"
+            - name: NOTIFICATION_REQUEST_RECONCILE_ENABLED
+              value: "true"
+            - name: NOTIFICATION_REQUEST_RECONCILE_INTERVAL_MS
+              value: "300000"
+            - name: NOTIFICATION_REQUEST_RECONCILE_STARTUP_DELAY_MS
+              value: "45000"
+            - name: NOTIFICATION_REQUEST_QUEUED_TIMEOUT_MINUTES
+              value: "30"
+            - name: NOTIFICATION_REQUEST_PROCESSING_TIMEOUT_MINUTES
+              value: "15"
+            - name: NOTIFICATION_REQUEST_RECONCILE_LIMIT
+              value: "500"
             - name: DIRECTUS_BASE_URL
               value: "http://directus-service.directus.svc.cluster.local:8055"
             - name: DIRECTUS_TOKEN_VAULT_PATH

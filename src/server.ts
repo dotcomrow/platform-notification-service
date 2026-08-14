@@ -26,6 +26,7 @@ import {
   markRequestQueued,
   patchBrowserPushSubscriptionLifecycle,
   patchNotificationStatus,
+  reconcileNotificationRequests,
   searchBrowserPushSubscriptions,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
@@ -37,6 +38,7 @@ import {
   parseBrowserSubscriptionStats,
   parseBrowserSubscription,
   parseDeliveryAttempt,
+  parseNotificationRequestReconcile,
   parseNotificationRequest,
   parseNotificationStatusPatch
 } from "./notifications/validation.js";
@@ -259,6 +261,44 @@ function scheduleBrowserSubscriptionCleanup(): void {
   const intervalTimer = setInterval(() => {
     void runBrowserSubscriptionCleanup("interval");
   }, config.browserSubscriptionCleanupIntervalMs);
+  startupTimer.unref?.();
+  intervalTimer.unref?.();
+}
+
+let notificationRequestReconcileRunning = false;
+
+async function runNotificationRequestReconcile(trigger: string): Promise<void> {
+  if (notificationRequestReconcileRunning) {
+    console.warn(`[platform-notification-service] notification request reconcile skipped; previous run is still active trigger=${trigger}`);
+    return;
+  }
+  notificationRequestReconcileRunning = true;
+  try {
+    const summary = await reconcileNotificationRequests({
+      queued_timeout_minutes: config.notificationRequestQueuedTimeoutMinutes,
+      processing_timeout_minutes: config.notificationRequestProcessingTimeoutMinutes,
+      limit: config.notificationRequestReconcileLimit
+    });
+    console.log(`[platform-notification-service] notification request reconcile trigger=${trigger} expired=${summary.expired} queued_timed_out=${summary.queued_timed_out} processing_timed_out=${summary.processing_timed_out} updated=${summary.updated} scanned=${summary.scanned} limit=${summary.limit}`);
+  } catch (error) {
+    console.error(`[platform-notification-service] notification request reconcile failed trigger=${trigger}: ${error instanceof Error ? truncate(error.message, 1000) : "unknown error"}`);
+  } finally {
+    notificationRequestReconcileRunning = false;
+  }
+}
+
+function scheduleNotificationRequestReconcile(): void {
+  if (!config.notificationRequestReconcileEnabled) {
+    console.log("[platform-notification-service] notification request reconcile is disabled.");
+    return;
+  }
+
+  const startupTimer = setTimeout(() => {
+    void runNotificationRequestReconcile("startup");
+  }, config.notificationRequestReconcileStartupDelayMs);
+  const intervalTimer = setInterval(() => {
+    void runNotificationRequestReconcile("interval");
+  }, config.notificationRequestReconcileIntervalMs);
   startupTimer.unref?.();
   intervalTimer.unref?.();
 }
@@ -542,6 +582,17 @@ app.post("/internal/canaries/notifications", async (req, res, next) => {
   }
 });
 
+app.post("/internal/notifications/reconcile-stale", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseNotificationRequestReconcile(req.body);
+    const summary = await reconcileNotificationRequests(input);
+    res.status(200).json({ ok: true, ...summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/internal/browser-subscriptions", async (req, res, next) => {
   try {
     await enforceInternalAuth(req);
@@ -663,8 +714,8 @@ app.post("/internal/notifications/:id/status", async (req, res, next) => {
   try {
     await enforceInternalAuth(req);
     const patch = parseNotificationStatusPatch(req.body);
-    await patchNotificationStatus(req.params.id, patch);
-    res.status(200).json({ ok: true, notification_request_id: req.params.id, status: patch.status });
+    const status = await patchNotificationStatus(req.params.id, patch);
+    res.status(200).json({ ok: true, notification_request_id: req.params.id, status });
   } catch (error) {
     next(error);
   }
@@ -714,4 +765,5 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(config.port, () => {
   console.log(`[platform-notification-service] listening on :${config.port} topic=${config.notificationRequestedTopic}`);
   scheduleBrowserSubscriptionCleanup();
+  scheduleNotificationRequestReconcile();
 });

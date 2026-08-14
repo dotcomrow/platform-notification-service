@@ -129,6 +129,34 @@ export const openApiSpec = {
           finished_at: { type: "string", format: "date-time" }
         }
       },
+      NotificationRequestReconcileRequest: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          queued_timeout_minutes: { type: "integer", minimum: 1, maximum: 1440 },
+          processing_timeout_minutes: { type: "integer", minimum: 1, maximum: 1440 },
+          limit: { type: "integer", minimum: 1, maximum: 5000 },
+          dry_run: { type: "boolean" }
+        }
+      },
+      NotificationRequestReconcileResponse: {
+        type: "object",
+        required: ["ok", "expired", "queued_timed_out", "processing_timed_out", "updated"],
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          expired: { type: "integer" },
+          queued_timed_out: { type: "integer" },
+          processing_timed_out: { type: "integer" },
+          scanned: { type: "integer" },
+          updated: { type: "integer" },
+          skipped: { type: "integer" },
+          dry_run: { type: "boolean" },
+          limit: { type: "integer" },
+          queued_timeout_minutes: { type: "integer" },
+          processing_timeout_minutes: { type: "integer" }
+        }
+      },
       DeliveryAttempt: {
         type: "object",
         required: ["channel", "recipient_json", "status"],
@@ -640,6 +668,30 @@ export const openApiSpec = {
             }
           },
           "503": { description: "Browser push VAPID public key is not configured." }
+        }
+      }
+    },
+    "/internal/notifications/reconcile-stale": {
+      post: {
+        operationId: "reconcileStaleNotificationRequests",
+        summary: "Mark expired or stale in-flight notification requests terminal.",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/NotificationRequestReconcileRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Notification request reconciliation summary.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/NotificationRequestReconcileResponse" }
+              }
+            }
+          }
         }
       }
     },

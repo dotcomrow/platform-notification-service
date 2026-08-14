@@ -133,13 +133,36 @@ export type NotificationRequestRecord = {
   data_json?: JsonRecord | null;
   context_json?: NotificationContext | null;
   metadata_json?: JsonRecord | null;
+  result_json?: JsonRecord | null;
   queue_topic?: string | null;
+  scheduled_for?: string | null;
+  expires_at?: string | null;
   requested_at?: string | null;
   queued_at?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
   last_message?: string | null;
   error_message?: string | null;
+};
+
+export type NotificationRequestReconcileInput = {
+  queued_timeout_minutes?: number;
+  processing_timeout_minutes?: number;
+  limit?: number;
+  dry_run?: boolean;
+};
+
+export type NotificationRequestReconcileSummary = {
+  expired: number;
+  queued_timed_out: number;
+  processing_timed_out: number;
+  scanned: number;
+  updated: number;
+  skipped: number;
+  dry_run: boolean;
+  limit: number;
+  queued_timeout_minutes: number;
+  processing_timeout_minutes: number;
 };
 
 export type NotificationDeliveryAttemptInput = {

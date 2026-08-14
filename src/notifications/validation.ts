@@ -9,6 +9,7 @@ import {
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionStatsInput,
   NotificationDeliveryAttemptInput,
+  NotificationRequestReconcileInput,
   NotificationRequestInput
 } from "./types.js";
 
@@ -69,6 +70,13 @@ export const notificationStatusPatchSchema = z.object({
   error_message: z.string().trim().optional(),
   started_at: z.string().datetime({ offset: true }).optional(),
   finished_at: z.string().datetime({ offset: true }).optional()
+});
+
+const notificationRequestReconcileSchema = z.object({
+  queued_timeout_minutes: z.number().int().min(1).max(1440).optional(),
+  processing_timeout_minutes: z.number().int().min(1).max(1440).optional(),
+  limit: z.number().int().min(1).max(5000).optional(),
+  dry_run: z.boolean().optional()
 });
 
 export const deliveryAttemptSchema = z.object({
@@ -214,6 +222,10 @@ export function parseNotificationRequest(body: unknown): NotificationRequestInpu
 
 export function parseNotificationStatusPatch(body: unknown): z.infer<typeof notificationStatusPatchSchema> {
   return notificationStatusPatchSchema.parse(unwrapInput(body));
+}
+
+export function parseNotificationRequestReconcile(body: unknown): NotificationRequestReconcileInput {
+  return notificationRequestReconcileSchema.parse(unwrapInput(body)) as NotificationRequestReconcileInput;
 }
 
 export function parseDeliveryAttempt(body: unknown): NotificationDeliveryAttemptInput {

@@ -8,6 +8,8 @@ import {
   NotificationDeliveryAttemptRecord,
   NotificationRecipientHint,
   NotificationRequestInput,
+  NotificationRequestReconcileInput,
+  NotificationRequestReconcileSummary,
   NotificationRequestRecord,
   NotificationStatus,
   NotificationTemplateRecord,
@@ -158,6 +160,31 @@ function wait(ms: number): Promise<void> {
 
 function addDirectusReadCacheBust(params: URLSearchParams): void {
   params.set("_", `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+}
+
+const TERMINAL_NOTIFICATION_STATUSES = new Set(["sent", "partially_sent", "failed", "canceled"]);
+
+function isTerminalNotificationStatus(status: unknown): boolean {
+  return TERMINAL_NOTIFICATION_STATUSES.has(asString(status).toLowerCase());
+}
+
+function timestampMillis(value: string | null | undefined): number | null {
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isPastTimestamp(value: string | null | undefined, nowMs: number): boolean {
+  const timestamp = timestampMillis(value);
+  return timestamp !== null && timestamp <= nowMs;
+}
+
+function requestIsDue(record: NotificationRequestRecord, nowMs: number): boolean {
+  const scheduledFor = timestampMillis(record.scheduled_for);
+  return scheduledFor === null || scheduledFor <= nowMs;
 }
 
 const browserSubscriptionUpsertLocks = new Map<string, Promise<BrowserPushSubscriptionRecord>>();
@@ -725,7 +752,10 @@ export async function getNotificationRequest(id: string): Promise<NotificationRe
     "data_json",
     "context_json",
     "metadata_json",
+    "result_json",
     "queue_topic",
+    "scheduled_for",
+    "expires_at",
     "requested_at",
     "queued_at",
     "started_at",
@@ -806,6 +836,196 @@ export async function markRequestQueueFailed(id: string, error: unknown): Promis
   });
 }
 
+const NOTIFICATION_REQUEST_RECONCILE_FIELDS = [
+  "id",
+  "event_key",
+  "source",
+  "status",
+  "correlation_id",
+  "idempotency_key",
+  "queue_topic",
+  "scheduled_for",
+  "expires_at",
+  "requested_at",
+  "queued_at",
+  "started_at",
+  "finished_at",
+  "last_message",
+  "error_message"
+].join(",");
+
+type NotificationRequestReconcileReason = "expired" | "queued_timed_out" | "processing_timed_out";
+
+type NotificationRequestReconcileCandidate = {
+  record: NotificationRequestRecord;
+  reason: NotificationRequestReconcileReason;
+};
+
+const NOTIFICATION_RECONCILE_REASON_PRECEDENCE: Record<NotificationRequestReconcileReason, number> = {
+  expired: 0,
+  processing_timed_out: 1,
+  queued_timed_out: 2
+};
+
+function reconcileReasonStatus(reason: NotificationRequestReconcileReason): NotificationStatus {
+  return reason === "expired" ? "canceled" : "failed";
+}
+
+function reconcileReasonMessage(reason: NotificationRequestReconcileReason, timeoutMinutes: number): string {
+  if (reason === "expired") {
+    return "Notification request expired before reaching a terminal state.";
+  }
+  if (reason === "processing_timed_out") {
+    return `Notification request stayed processing longer than ${timeoutMinutes} minutes.`;
+  }
+  return `Notification request stayed queued longer than ${timeoutMinutes} minutes.`;
+}
+
+async function fetchNotificationRequestCandidates(
+  status: "queued" | "processing",
+  dateField: "expires_at" | "queued_at" | "requested_at" | "started_at",
+  beforeIso: string,
+  limit: number
+): Promise<NotificationRequestRecord[]> {
+  const params = new URLSearchParams();
+  params.set("fields", NOTIFICATION_REQUEST_RECONCILE_FIELDS);
+  params.set("filter[status][_eq]", status);
+  params.set(`filter[${dateField}][_lt]`, beforeIso);
+  params.set("sort", `${dateField},requested_at,date_created`);
+  params.set("limit", String(limit));
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<NotificationRequestRecord>>(
+    `/items/${encodeURIComponent(config.notificationRequestCollection)}?${params.toString()}`
+  );
+  return response.data ?? [];
+}
+
+function addNotificationRequestCandidate(
+  candidates: Map<string, NotificationRequestReconcileCandidate>,
+  record: NotificationRequestRecord,
+  reason: NotificationRequestReconcileReason,
+  nowMs: number
+): boolean {
+  if (!record.id || isTerminalNotificationStatus(record.status)) {
+    return false;
+  }
+  if (reason !== "expired" && !requestIsDue(record, nowMs)) {
+    return false;
+  }
+  const existing = candidates.get(record.id);
+  if (
+    existing
+    && NOTIFICATION_RECONCILE_REASON_PRECEDENCE[existing.reason] <= NOTIFICATION_RECONCILE_REASON_PRECEDENCE[reason]
+  ) {
+    return false;
+  }
+  candidates.set(record.id, { record, reason });
+  return true;
+}
+
+async function reconcileNotificationRequestCandidate(
+  candidate: NotificationRequestReconcileCandidate,
+  nowIso: string,
+  queuedTimeoutMinutes: number,
+  processingTimeoutMinutes: number
+): Promise<void> {
+  const status = reconcileReasonStatus(candidate.reason);
+  const timeoutMinutes = candidate.reason === "processing_timed_out"
+    ? processingTimeoutMinutes
+    : queuedTimeoutMinutes;
+  const message = reconcileReasonMessage(candidate.reason, timeoutMinutes);
+  await updateNotificationRequest(candidate.record.id, {
+    status,
+    finished_at: nowIso,
+    last_message: `Notification request was marked ${status} by stale request reconciliation.`,
+    result_json: {
+      reconciled_by: "platform-notification-service",
+      reconcile_reason: candidate.reason,
+      previous_status: candidate.record.status || null,
+      requested_at: candidate.record.requested_at || null,
+      queued_at: candidate.record.queued_at || null,
+      started_at: candidate.record.started_at || null,
+      scheduled_for: candidate.record.scheduled_for || null,
+      expires_at: candidate.record.expires_at || null
+    },
+    error_message: message
+  });
+}
+
+export async function reconcileNotificationRequests(
+  input: NotificationRequestReconcileInput = {}
+): Promise<NotificationRequestReconcileSummary> {
+  const queuedTimeoutMinutes = Math.max(1, Math.floor(input.queued_timeout_minutes ?? config.notificationRequestQueuedTimeoutMinutes));
+  const processingTimeoutMinutes = Math.max(1, Math.floor(input.processing_timeout_minutes ?? config.notificationRequestProcessingTimeoutMinutes));
+  const limit = Math.max(1, Math.min(5000, Math.floor(input.limit ?? config.notificationRequestReconcileLimit)));
+  const dryRun = input.dry_run === true;
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const queuedCutoffIso = new Date(nowMs - queuedTimeoutMinutes * 60_000).toISOString();
+  const processingCutoffIso = new Date(nowMs - processingTimeoutMinutes * 60_000).toISOString();
+  const candidates = new Map<string, NotificationRequestReconcileCandidate>();
+  let scanned = 0;
+
+  const candidateGroups = [
+    await fetchNotificationRequestCandidates("queued", "expires_at", nowIso, limit),
+    await fetchNotificationRequestCandidates("processing", "expires_at", nowIso, limit),
+    await fetchNotificationRequestCandidates("queued", "queued_at", queuedCutoffIso, limit),
+    await fetchNotificationRequestCandidates("queued", "requested_at", queuedCutoffIso, limit),
+    await fetchNotificationRequestCandidates("processing", "started_at", processingCutoffIso, limit),
+    await fetchNotificationRequestCandidates("processing", "requested_at", processingCutoffIso, limit)
+  ];
+
+  for (const record of candidateGroups[0]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "expired", nowMs);
+  }
+  for (const record of candidateGroups[1]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "expired", nowMs);
+  }
+  for (const record of candidateGroups[2]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "queued_timed_out", nowMs);
+  }
+  for (const record of candidateGroups[3]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "queued_timed_out", nowMs);
+  }
+  for (const record of candidateGroups[4]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "processing_timed_out", nowMs);
+  }
+  for (const record of candidateGroups[5]) {
+    scanned += 1;
+    addNotificationRequestCandidate(candidates, record, "processing_timed_out", nowMs);
+  }
+
+  const selected = [...candidates.values()].slice(0, limit);
+  const summary: NotificationRequestReconcileSummary = {
+    expired: selected.filter((candidate) => candidate.reason === "expired").length,
+    queued_timed_out: selected.filter((candidate) => candidate.reason === "queued_timed_out").length,
+    processing_timed_out: selected.filter((candidate) => candidate.reason === "processing_timed_out").length,
+    scanned,
+    updated: 0,
+    skipped: candidates.size - selected.length,
+    dry_run: dryRun,
+    limit,
+    queued_timeout_minutes: queuedTimeoutMinutes,
+    processing_timeout_minutes: processingTimeoutMinutes
+  };
+
+  if (dryRun) {
+    return summary;
+  }
+
+  for (const candidate of selected) {
+    await reconcileNotificationRequestCandidate(candidate, nowIso, queuedTimeoutMinutes, processingTimeoutMinutes);
+    summary.updated += 1;
+  }
+
+  return summary;
+}
+
 export async function patchNotificationStatus(
   id: string,
   values: {
@@ -816,9 +1036,29 @@ export async function patchNotificationStatus(
     started_at?: string;
     finished_at?: string;
   }
-): Promise<void> {
+): Promise<NotificationStatus | string> {
   const now = new Date().toISOString();
-  const terminal = values.status === "sent" || values.status === "partially_sent" || values.status === "failed" || values.status === "canceled";
+  const current = await getNotificationRequest(id);
+  if (isTerminalNotificationStatus(current.status)) {
+    return current.status;
+  }
+  const nowMs = Date.parse(now);
+  if (values.status === "processing" && isPastTimestamp(current.expires_at, nowMs)) {
+    await updateNotificationRequest(id, {
+      status: "canceled",
+      finished_at: now,
+      last_message: "Notification request expired before delivery processing started.",
+      result_json: {
+        canceled_by: "platform-notification-service",
+        reconcile_reason: "expired_before_processing",
+        previous_status: current.status || null,
+        expires_at: current.expires_at || null
+      },
+      error_message: "Notification request expired before delivery processing started."
+    });
+    return "canceled";
+  }
+  const terminal = isTerminalNotificationStatus(values.status);
   await updateNotificationRequest(id, {
     status: values.status,
     last_message: values.message || null,
@@ -827,6 +1067,7 @@ export async function patchNotificationStatus(
     started_at: values.started_at || (values.status === "processing" ? now : undefined),
     finished_at: values.finished_at || (terminal ? now : undefined)
   });
+  return values.status;
 }
 
 export async function createDeliveryAttempt(
