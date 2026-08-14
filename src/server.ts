@@ -230,10 +230,10 @@ async function resolveBrowserPushPublicKey(): Promise<string> {
 
 let browserSubscriptionCleanupRunning = false;
 
-async function runBrowserSubscriptionCleanup(trigger: string): Promise<void> {
+async function runBrowserSubscriptionCleanup(trigger: string): Promise<boolean> {
   if (browserSubscriptionCleanupRunning) {
     console.warn(`[platform-notification-service] browser subscription cleanup skipped; previous run is still active trigger=${trigger}`);
-    return;
+    return false;
   }
   browserSubscriptionCleanupRunning = true;
   try {
@@ -242,11 +242,45 @@ async function runBrowserSubscriptionCleanup(trigger: string): Promise<void> {
       limit: config.browserSubscriptionCleanupLimit
     });
     console.log(`[platform-notification-service] browser subscription cleanup trigger=${trigger} expired=${summary.expired} stale=${summary.stale} superseded=${summary.superseded} stale_days=${summary.stale_days} limit=${summary.limit}`);
+    return true;
   } catch (error) {
     console.error(`[platform-notification-service] browser subscription cleanup failed trigger=${trigger}: ${error instanceof Error ? truncate(error.message, 1000) : "unknown error"}`);
+    return false;
   } finally {
     browserSubscriptionCleanupRunning = false;
   }
+}
+
+type StartupRetryOptions = {
+  name: string;
+  initialDelayMs: number;
+  retryIntervalMs: number;
+  maxAttempts: number;
+  run: (trigger: string) => Promise<boolean>;
+};
+
+function scheduleStartupRetry(options: StartupRetryOptions): void {
+  let attempt = 0;
+  const runAttempt = (): void => {
+    attempt += 1;
+    const trigger = attempt === 1 ? "startup" : `startup-retry-${attempt}`;
+    void options.run(trigger).then((ok) => {
+      if (ok) {
+        if (attempt > 1) {
+          console.log(`[platform-notification-service] ${options.name} startup succeeded after ${attempt} attempts`);
+        }
+        return;
+      }
+      if (attempt >= options.maxAttempts) {
+        console.error(`[platform-notification-service] ${options.name} startup retries exhausted attempts=${attempt} retry_interval_ms=${options.retryIntervalMs}`);
+        return;
+      }
+      const retryTimer = setTimeout(runAttempt, options.retryIntervalMs);
+      retryTimer.unref?.();
+    });
+  };
+  const startupTimer = setTimeout(runAttempt, options.initialDelayMs);
+  startupTimer.unref?.();
 }
 
 function scheduleBrowserSubscriptionCleanup(): void {
@@ -255,22 +289,25 @@ function scheduleBrowserSubscriptionCleanup(): void {
     return;
   }
 
-  const startupTimer = setTimeout(() => {
-    void runBrowserSubscriptionCleanup("startup");
-  }, config.browserSubscriptionCleanupStartupDelayMs);
+  scheduleStartupRetry({
+    name: "browser subscription cleanup",
+    initialDelayMs: config.browserSubscriptionCleanupStartupDelayMs,
+    retryIntervalMs: config.browserSubscriptionCleanupStartupRetryIntervalMs,
+    maxAttempts: config.browserSubscriptionCleanupStartupMaxAttempts,
+    run: runBrowserSubscriptionCleanup
+  });
   const intervalTimer = setInterval(() => {
     void runBrowserSubscriptionCleanup("interval");
   }, config.browserSubscriptionCleanupIntervalMs);
-  startupTimer.unref?.();
   intervalTimer.unref?.();
 }
 
 let notificationRequestReconcileRunning = false;
 
-async function runNotificationRequestReconcile(trigger: string): Promise<void> {
+async function runNotificationRequestReconcile(trigger: string): Promise<boolean> {
   if (notificationRequestReconcileRunning) {
     console.warn(`[platform-notification-service] notification request reconcile skipped; previous run is still active trigger=${trigger}`);
-    return;
+    return false;
   }
   notificationRequestReconcileRunning = true;
   try {
@@ -280,8 +317,10 @@ async function runNotificationRequestReconcile(trigger: string): Promise<void> {
       limit: config.notificationRequestReconcileLimit
     });
     console.log(`[platform-notification-service] notification request reconcile trigger=${trigger} expired=${summary.expired} queued_timed_out=${summary.queued_timed_out} processing_timed_out=${summary.processing_timed_out} updated=${summary.updated} scanned=${summary.scanned} limit=${summary.limit}`);
+    return true;
   } catch (error) {
     console.error(`[platform-notification-service] notification request reconcile failed trigger=${trigger}: ${error instanceof Error ? truncate(error.message, 1000) : "unknown error"}`);
+    return false;
   } finally {
     notificationRequestReconcileRunning = false;
   }
@@ -293,13 +332,16 @@ function scheduleNotificationRequestReconcile(): void {
     return;
   }
 
-  const startupTimer = setTimeout(() => {
-    void runNotificationRequestReconcile("startup");
-  }, config.notificationRequestReconcileStartupDelayMs);
+  scheduleStartupRetry({
+    name: "notification request reconcile",
+    initialDelayMs: config.notificationRequestReconcileStartupDelayMs,
+    retryIntervalMs: config.notificationRequestReconcileStartupRetryIntervalMs,
+    maxAttempts: config.notificationRequestReconcileStartupMaxAttempts,
+    run: runNotificationRequestReconcile
+  });
   const intervalTimer = setInterval(() => {
     void runNotificationRequestReconcile("interval");
   }, config.notificationRequestReconcileIntervalMs);
-  startupTimer.unref?.();
   intervalTimer.unref?.();
 }
 

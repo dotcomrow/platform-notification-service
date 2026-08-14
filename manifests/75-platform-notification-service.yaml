@@ -356,6 +356,10 @@ spec:
               value: "21600000"
             - name: BROWSER_SUBSCRIPTION_CLEANUP_STARTUP_DELAY_MS
               value: "30000"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_STARTUP_RETRY_INTERVAL_MS
+              value: "30000"
+            - name: BROWSER_SUBSCRIPTION_CLEANUP_STARTUP_MAX_ATTEMPTS
+              value: "20"
             - name: BROWSER_SUBSCRIPTION_STALE_DAYS
               value: "90"
             - name: BROWSER_SUBSCRIPTION_CLEANUP_LIMIT
@@ -366,6 +370,10 @@ spec:
               value: "300000"
             - name: NOTIFICATION_REQUEST_RECONCILE_STARTUP_DELAY_MS
               value: "45000"
+            - name: NOTIFICATION_REQUEST_RECONCILE_STARTUP_RETRY_INTERVAL_MS
+              value: "30000"
+            - name: NOTIFICATION_REQUEST_RECONCILE_STARTUP_MAX_ATTEMPTS
+              value: "20"
             - name: NOTIFICATION_REQUEST_QUEUED_TIMEOUT_MINUTES
               value: "30"
             - name: NOTIFICATION_REQUEST_PROCESSING_TIMEOUT_MINUTES
