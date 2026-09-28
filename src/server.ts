@@ -16,6 +16,9 @@ import {
   createDeliveryAttempt,
   createNotificationRequest,
   browseBrowserPushSubscriptions,
+  browserSubscriptionInputNotificationLink,
+  browserSubscriptionInputPersistent,
+  browserSubscriptionNotificationLink,
   enrichNotificationRequest,
   findRequestByIdempotencyKey,
   listDeliveryAttemptsForRequest,
@@ -640,12 +643,19 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
     await enforceInternalAuth(req);
     const input = parseBrowserSubscription(req.body);
     const subscription = await upsertBrowserPushSubscription(input);
+    const notificationLink = browserSubscriptionNotificationLink(subscription);
     res.status(200).json({
       ok: true,
       browser_subscription_id: subscription.id || null,
       status: subscription.status,
       permission: subscription.permission || input.permission,
-      fallback_channels: subscription.fallback_channels_json || input.fallback_channels
+      fallback_channels: subscription.fallback_channels_json || input.fallback_channels,
+      notification_link: notificationLink,
+      notification_link_persisted: Boolean(
+        notificationLink &&
+        notificationLink.persistent === browserSubscriptionInputPersistent(input) &&
+        asString(notificationLink.display_name) === asString(browserSubscriptionInputNotificationLink(input)?.display_name)
+      )
     });
   } catch (error) {
     next(error);

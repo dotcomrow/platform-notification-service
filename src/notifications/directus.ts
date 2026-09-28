@@ -1302,13 +1302,13 @@ function normalizedIdentityPart(value: unknown): string {
   return asString(value).trim().toLowerCase();
 }
 
-function browserSubscriptionInputNotificationLink(input: BrowserPushSubscriptionInput): JsonRecord | null {
+export function browserSubscriptionInputNotificationLink(input: BrowserPushSubscriptionInput): JsonRecord | null {
   const metadata = asRecord(input.metadata);
   const capabilities = asRecord(input.capabilities);
   return asRecord(metadata?.notification_link) ?? asRecord(capabilities?.notification_link);
 }
 
-function browserSubscriptionInputPersistent(input: BrowserPushSubscriptionInput): boolean {
+export function browserSubscriptionInputPersistent(input: BrowserPushSubscriptionInput): boolean {
   return browserSubscriptionInputNotificationLink(input)?.persistent === true;
 }
 
@@ -2286,7 +2286,7 @@ function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]
   });
 }
 
-function browserSubscriptionNotificationLink(record: BrowserPushSubscriptionRecord): JsonRecord | null {
+export function browserSubscriptionNotificationLink(record: BrowserPushSubscriptionRecord): JsonRecord | null {
   const metadata = asRecord(record.metadata_json);
   const capabilities = asRecord(record.capabilities_json);
   return asRecord(metadata?.notification_link) ?? asRecord(capabilities?.notification_link);
