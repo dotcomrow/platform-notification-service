@@ -23,7 +23,8 @@ function allowsBrowserPushTrustedTokens(req: Request): boolean {
   }
   return req.path === "/internal/browser-push/public-key"
     || req.path === "/internal/browser-subscriptions"
-    || req.path === "/internal/browser-subscriptions/delete";
+    || req.path === "/internal/browser-subscriptions/delete"
+    || req.path === "/internal/browser-subscriptions/resolve";
 }
 
 function allowsBrowserSubscriptionSearchTrustedTokens(req: Request): boolean {

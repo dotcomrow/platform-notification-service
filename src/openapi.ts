@@ -616,6 +616,30 @@ export const openApiSpec = {
         }
       }
     },
+    "/internal/browser-subscriptions/resolve": {
+      post: {
+        operationId: "resolveBrowserSubscription",
+        summary: "Resolve safe browser subscription settings after validating browser ownership.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionDeleteRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser subscription ownership was validated.",
+            content: {
+              "application/json": {
+                schema: { type: "object", additionalProperties: true }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/browser-subscriptions/search": {
       post: {
         operationId: "searchBrowserSubscriptions",

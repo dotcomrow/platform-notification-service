@@ -1963,6 +1963,22 @@ export async function deleteBrowserPushSubscription(input: BrowserPushSubscripti
   return true;
 }
 
+export async function resolveBrowserPushSubscriptionOwnership(
+  input: BrowserPushSubscriptionDeleteInput
+): Promise<BrowserPushSubscriptionRecord> {
+  const existing = await findBrowserSubscriptionById(input.browser_subscription_id);
+  const recordInstallationId = asString(existing?.browser_installation_id);
+  if (
+    !existing?.id ||
+    !recordInstallationId ||
+    recordInstallationId !== input.browser_installation_id ||
+    !browserSubscriptionProofMatches(existing, input.browser_subscription_client_secret)
+  ) {
+    throw Object.assign(new Error("Browser subscription was not found."), { status: 404 });
+  }
+  return existing;
+}
+
 async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   const now = new Date().toISOString();
   const subscription = input.subscription;

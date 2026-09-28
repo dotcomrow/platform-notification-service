@@ -31,6 +31,7 @@ import {
   patchBrowserPushSubscriptionLifecycle,
   patchNotificationStatus,
   reconcileNotificationRequests,
+  resolveBrowserPushSubscriptionOwnership,
   searchBrowserPushSubscriptions,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
@@ -673,6 +674,26 @@ app.post("/internal/browser-subscriptions/delete", async (req, res, next) => {
       ok: true,
       deleted,
       browser_subscription_id: input.browser_subscription_id
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/resolve", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionDelete(req.body);
+    const subscription = await resolveBrowserPushSubscriptionOwnership(input);
+    res.status(200).json({
+      ok: true,
+      browser_subscription_id: subscription.id,
+      browser_installation_id: subscription.browser_installation_id,
+      status: subscription.status,
+      permission: subscription.permission,
+      notification_link: browserSubscriptionNotificationLink(subscription),
+      last_seen_at: subscription.last_seen_at,
+      date_updated: subscription.date_updated
     });
   } catch (error) {
     next(error);
