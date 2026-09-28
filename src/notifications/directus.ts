@@ -1454,6 +1454,7 @@ export async function searchBrowserPushSubscriptions(
   }
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(field === "name" || field === "all" || field === "id" ? Math.min(500, limit * 20) : limit));
+  addDirectusReadCacheBust(params);
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
