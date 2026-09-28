@@ -214,6 +214,12 @@ export type BrowserPushSubscriptionInput = {
   };
 };
 
+export type BrowserPushSubscriptionDeleteInput = {
+  browser_subscription_id: string;
+  browser_installation_id: string;
+  browser_subscription_client_secret: string;
+};
+
 export type BrowserPushSubscriptionSearchField = "all" | "id" | "user_id" | "email" | "name";
 
 export type BrowserPushSubscriptionSearchInput = {

@@ -13,6 +13,7 @@ import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
   cleanupBrowserPushSubscriptions,
+  deleteBrowserPushSubscription,
   createDeliveryAttempt,
   createNotificationRequest,
   browseBrowserPushSubscriptions,
@@ -35,6 +36,7 @@ import {
 } from "./notifications/directus.js";
 import {
   parseBrowserSubscriptionCleanup,
+  parseBrowserSubscriptionDelete,
   parseBrowserSubscriptionBrowse,
   parseBrowserSubscriptionLifecyclePatch,
   parseBrowserSubscriptionSearch,
@@ -656,6 +658,21 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
         notificationLink.persistent === browserSubscriptionInputPersistent(input) &&
         asString(notificationLink.display_name) === asString(browserSubscriptionInputNotificationLink(input)?.display_name)
       )
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/delete", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionDelete(req.body);
+    const deleted = await deleteBrowserPushSubscription(input);
+    res.status(200).json({
+      ok: true,
+      deleted,
+      browser_subscription_id: input.browser_subscription_id
     });
   } catch (error) {
     next(error);

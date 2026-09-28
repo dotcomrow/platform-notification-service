@@ -4,6 +4,7 @@ import { asRecord, JsonRecord } from "../lib/json.js";
 import {
   BrowserPushSubscriptionBrowseInput,
   BrowserPushSubscriptionCleanupInput,
+  BrowserPushSubscriptionDeleteInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionSearchInput,
@@ -106,7 +107,7 @@ const browserPushSubscriptionSchema = z.object({
   browser_installation_id: z.string().trim().min(1).optional(),
   browser_subscription_client_secret: z.string().trim().min(32).max(512).optional(),
   user_id: z.string().trim().min(1).optional(),
-  user_email: z.string().trim().min(1).optional(),
+  user_email: z.string().trim().email().optional(),
   user_phone: z.string().trim().min(1).optional(),
   user_agent: z.string().trim().min(1).optional(),
   organization_id: z.string().trim().min(1).optional(),
@@ -126,6 +127,13 @@ const browserPushSubscriptionSchema = z.object({
     value.capabilities.disabled_by_user === true || capabilityRegistrationStatus === "disabled";
   const isFallbackCapabilityReport =
     capabilityFallbackRequired || capabilityRegistrationStatus === "failed" || capabilityDisabledByUser;
+  if (value.subscription && !value.user_email) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["user_email"],
+      message: "a valid email address is required to create a browser subscription"
+    });
+  }
   if (
     value.supported &&
     value.permission === "granted" &&
@@ -145,6 +153,12 @@ const browserPushSubscriptionLifecyclePatchSchema = z.object({
   message: z.string().trim().min(1).optional(),
   provider_status_code: z.number().int().min(100).max(599).optional(),
   metadata: jsonRecordSchema.optional()
+});
+
+const browserPushSubscriptionDeleteSchema = z.object({
+  browser_subscription_id: z.string().trim().min(1),
+  browser_installation_id: z.string().trim().min(1),
+  browser_subscription_client_secret: z.string().trim().min(32).max(512)
 });
 
 const browserPushSubscriptionCleanupSchema = z.object({
@@ -238,6 +252,10 @@ export function parseBrowserSubscription(body: unknown): BrowserPushSubscription
 
 export function parseBrowserSubscriptionLifecyclePatch(body: unknown): BrowserPushSubscriptionLifecyclePatchInput {
   return browserPushSubscriptionLifecyclePatchSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionLifecyclePatchInput;
+}
+
+export function parseBrowserSubscriptionDelete(body: unknown): BrowserPushSubscriptionDeleteInput {
+  return browserPushSubscriptionDeleteSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionDeleteInput;
 }
 
 export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubscriptionCleanupInput {

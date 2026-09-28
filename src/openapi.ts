@@ -222,6 +222,16 @@ export const openApiSpec = {
           metadata: { type: "object", additionalProperties: true }
         }
       },
+      BrowserPushSubscriptionDeleteRequest: {
+        type: "object",
+        required: ["browser_subscription_id", "browser_installation_id", "browser_subscription_client_secret"],
+        additionalProperties: false,
+        properties: {
+          browser_subscription_id: { type: "string" },
+          browser_installation_id: { type: "string" },
+          browser_subscription_client_secret: { type: "string", minLength: 32, maxLength: 512 }
+        }
+      },
       BrowserPushSubscriptionSearchRequest: {
         type: "object",
         required: ["organization_id", "app_id"],
@@ -568,6 +578,38 @@ export const openApiSpec = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/delete": {
+      post: {
+        operationId: "deleteBrowserSubscription",
+        summary: "Delete a browser Web Push subscription after validating browser ownership.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionDeleteRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push subscription was deleted or was already absent.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["ok", "deleted", "browser_subscription_id"],
+                  properties: {
+                    ok: { type: "boolean" },
+                    deleted: { type: "boolean" },
+                    browser_subscription_id: { type: "string" }
+                  }
+                }
               }
             }
           }

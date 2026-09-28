@@ -17,6 +17,7 @@ import {
   BrowserPushSubscriptionBrowseInput,
   BrowserPushSubscriptionBrowseResult,
   BrowserPushSubscriptionCleanupInput,
+  BrowserPushSubscriptionDeleteInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionRecord,
@@ -1941,6 +1942,25 @@ export async function upsertBrowserPushSubscription(input: BrowserPushSubscripti
     browserSubscriptionUpsertLockKeys(input),
     () => upsertBrowserPushSubscriptionUnlocked(input)
   );
+}
+
+export async function deleteBrowserPushSubscription(input: BrowserPushSubscriptionDeleteInput): Promise<boolean> {
+  const existing = await findBrowserSubscriptionById(input.browser_subscription_id);
+  if (!existing?.id) {
+    return false;
+  }
+  const recordInstallationId = asString(existing.browser_installation_id);
+  if (!recordInstallationId || recordInstallationId !== input.browser_installation_id) {
+    throw Object.assign(new Error("Browser subscription ownership proof is required."), { status: 403 });
+  }
+  if (!browserSubscriptionProofMatches(existing, input.browser_subscription_client_secret)) {
+    throw Object.assign(new Error("Browser subscription ownership proof is required."), { status: 403 });
+  }
+  await directusJson<unknown>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(existing.id)}`,
+    { method: "DELETE" }
+  );
+  return true;
 }
 
 async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
