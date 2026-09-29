@@ -237,6 +237,9 @@ function browserSubscriptionUpsertLockKeys(input: BrowserPushSubscriptionInput):
   if (endpoint) {
     keys.push(`endpoint:${sha256(endpoint)}`);
   }
+  if (input.user_email) {
+    keys.push(`email:${normalizedIdentityPart(input.user_email)}`);
+  }
   if (identity) {
     keys.push(`identity:${persistentIdentityKey(identity)}`);
   }
@@ -1176,6 +1179,34 @@ async function findBrowserSubscriptionById(id: string): Promise<BrowserPushSubsc
   return response.data?.[0] ?? null;
 }
 
+async function assertBrowserSubscriptionEmailAvailable(
+  email: string | undefined,
+  currentRecordId?: string | null
+): Promise<void> {
+  const normalizedEmail = normalizedIdentityPart(email);
+  if (!normalizedEmail) {
+    return;
+  }
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+  params.set("filter[user_email][_icontains]", normalizedEmail);
+  params.set("limit", "100");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  const conflict = (response.data ?? []).find((record) =>
+    normalizedIdentityPart(record.user_email) === normalizedEmail &&
+    asString(record.id) !== asString(currentRecordId)
+  );
+  if (conflict) {
+    throw Object.assign(
+      new Error("This email address is already subscribed. Unsubscribe the existing browser before using it again."),
+      { status: 409 }
+    );
+  }
+}
+
 async function listBrowserSubscriptionsForPersistentIdentity(
   identity: BrowserSubscriptionPersistentIdentity,
   limit = 100
@@ -1201,16 +1232,6 @@ async function listBrowserSubscriptionsForPersistentIdentity(
   return (response.data ?? [])
     .filter(isCurrentBrowserSubscriptionState)
     .filter((record) => browserSubscriptionPersistentIdentityMatches(record, identity));
-}
-
-async function findBrowserSubscriptionByPersistentIdentity(
-  input: BrowserPushSubscriptionInput
-): Promise<BrowserPushSubscriptionRecord | null> {
-  const identity = browserSubscriptionPersistentIdentityFromInput(input);
-  if (!identity) {
-    return null;
-  }
-  return preferredBrowserSubscriptionRecord(await listBrowserSubscriptionsForPersistentIdentity(identity, 25));
 }
 
 function browserSubscriptionTime(record: BrowserPushSubscriptionRecord): number {
@@ -2003,6 +2024,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     assertBrowserSubscriptionMatchesInstallation(existingById, input);
     const existing = existingById ?? await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
     assertBrowserSubscriptionCanUpdate(existing, input);
+    await assertBrowserSubscriptionEmailAvailable(input.user_email, existing?.id);
     const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
@@ -2072,13 +2094,9 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
   const byInstallation = !byId && !byEndpoint && input.browser_installation_id
     ? await findBrowserSubscriptionByInstallationId(input.browser_installation_id)
     : null;
-  const byIdentity = !byId && !byEndpoint && !byInstallation
-    ? await findBrowserSubscriptionByPersistentIdentity(input)
-    : null;
   const existing = byId ?? byEndpoint ??
-    (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null) ??
-    byIdentity;
-  const existingFromPersistentIdentity = Boolean(byIdentity?.id && existing?.id === byIdentity.id);
+    (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
+  await assertBrowserSubscriptionEmailAvailable(input.user_email, existing?.id);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -2097,7 +2115,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     capabilities_json: redactJsonRecord(input.capabilities),
     fallback_channels_json: input.fallback_channels,
     user_agent: input.user_agent || asString(input.capabilities.user_agent) || null,
-    metadata_json: browserSubscriptionMetadata(input, existing, { preserveExistingProof: !existingFromPersistentIdentity }),
+    metadata_json: browserSubscriptionMetadata(input, existing),
     status: input.permission === "granted" ? "active" : "disabled",
     last_seen_at: now
   };

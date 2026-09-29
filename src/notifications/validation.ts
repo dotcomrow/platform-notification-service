@@ -107,7 +107,7 @@ const browserPushSubscriptionSchema = z.object({
   browser_installation_id: z.string().trim().min(1).optional(),
   browser_subscription_client_secret: z.string().trim().min(32).max(512).optional(),
   user_id: z.string().trim().min(1).optional(),
-  user_email: z.string().trim().email().optional(),
+  user_email: z.string().trim().email().transform((value) => value.toLowerCase()).optional(),
   user_phone: z.string().trim().min(1).optional(),
   user_agent: z.string().trim().min(1).optional(),
   organization_id: z.string().trim().min(1).optional(),

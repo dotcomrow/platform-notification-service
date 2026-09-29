@@ -217,6 +217,8 @@ configurable through environment variables.
 - `status`
 - `last_seen_at`
 
+`user_email` is normalized by the service and enforced as case-insensitively unique by the Directus database schema. `metadata_json.notification_link.display_name` remains display metadata and is not the uniqueness key.
+
 `platform_notification_templates`:
 
 - `id`
