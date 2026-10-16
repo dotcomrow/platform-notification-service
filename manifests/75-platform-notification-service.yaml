@@ -406,7 +406,7 @@ spec:
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS
-              value: "platform-deploy-service,runtime-status-service"
+              value: "platform-deploy-service,runtime-status-service,suncoast-crm-api"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/platform-notification-service/clients"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY
