@@ -7,6 +7,7 @@ import {
   BrowserPushSubscriptionDeleteInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
+  BrowserPushSubscriptionPreferenceInput,
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionStatsInput,
   NotificationDeliveryAttemptInput,
@@ -45,6 +46,7 @@ const notificationRequestSchema = z.object({
   organization_id: z.string().trim().min(1).optional(),
   app_id: z.string().trim().min(1).optional(),
   actor_user_id: z.string().trim().min(1).optional(),
+  browser_installation_id: z.string().trim().min(1).optional(),
   notification_key: z.string().trim().min(1).optional(),
   template_key: z.string().trim().min(1).optional(),
   locale: z.string().trim().min(1).optional(),
@@ -161,6 +163,14 @@ const browserPushSubscriptionDeleteSchema = z.object({
   browser_subscription_client_secret: z.string().trim().min(32).max(512)
 });
 
+const browserPushSubscriptionPreferenceSchema = z.object({
+  browser_subscription_id: z.string().trim().min(1),
+  user_id: z.string().trim().min(1).optional(),
+  user_email: z.string().trim().email().transform((value) => value.toLowerCase()).optional()
+}).refine((value) => Boolean(value.user_id || value.user_email), {
+  message: "user_id or user_email is required"
+});
+
 const browserPushSubscriptionCleanupSchema = z.object({
   stale_days: z.number().int().min(1).max(3650).optional(),
   limit: z.number().int().min(1).max(5000).optional(),
@@ -173,7 +183,7 @@ const browserPushSubscriptionSearchSchema = z.object({
   organization_id: z.string().trim().min(1),
   app_id: z.string().trim().min(1),
   status: z.string().trim().min(1).default("active"),
-  limit: z.number().int().min(1).max(100).default(25)
+  limit: z.number().int().min(1).max(500).default(25)
 });
 
 const browserPushSubscriptionBrowseBaseSchema = z.object({
@@ -256,6 +266,10 @@ export function parseBrowserSubscriptionLifecyclePatch(body: unknown): BrowserPu
 
 export function parseBrowserSubscriptionDelete(body: unknown): BrowserPushSubscriptionDeleteInput {
   return browserPushSubscriptionDeleteSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionDeleteInput;
+}
+
+export function parseBrowserSubscriptionPreference(body: unknown): BrowserPushSubscriptionPreferenceInput {
+  return browserPushSubscriptionPreferenceSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionPreferenceInput;
 }
 
 export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubscriptionCleanupInput {

@@ -33,6 +33,7 @@ import {
   reconcileNotificationRequests,
   resolveBrowserPushSubscriptionOwnership,
   searchBrowserPushSubscriptions,
+  setPreferredBrowserPushSubscription,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
 import {
@@ -40,6 +41,7 @@ import {
   parseBrowserSubscriptionDelete,
   parseBrowserSubscriptionBrowse,
   parseBrowserSubscriptionLifecyclePatch,
+  parseBrowserSubscriptionPreference,
   parseBrowserSubscriptionSearch,
   parseBrowserSubscriptionStats,
   parseBrowserSubscription,
@@ -217,7 +219,12 @@ async function queueNotificationInput(parsedInput: NotificationRequestInput): Pr
 
 async function queueNotification(req: Request, res: Response): Promise<void> {
   await enforceInternalAuth(req);
-  const result = await queueNotificationInput(parseNotificationRequest(req.body));
+  const parsed = parseNotificationRequest(req.body);
+  const browserInstallationId = asString(req.header("x-suncoast-browser-id") || req.header("x-browser-id"));
+  const result = await queueNotificationInput({
+    ...parsed,
+    browser_installation_id: parsed.browser_installation_id || browserInstallationId || undefined
+  });
   res.status(result.duplicate ? 200 : 202).json(
     notificationQueuedPayload(result.record_id, result.duplicate, result.status, result.correlation_id)
   );
@@ -758,6 +765,22 @@ app.post("/internal/browser-subscriptions/stats", async (req, res, next) => {
     res.status(200).json({
       ok: true,
       stats
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/preferred", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionPreference(req.body);
+    const subscription = await setPreferredBrowserPushSubscription(input);
+    res.status(200).json({
+      ok: true,
+      browser_subscription_id: subscription.id,
+      browser_installation_id: subscription.browser_installation_id,
+      is_preferred: subscription.is_preferred === true
     });
   } catch (error) {
     next(error);

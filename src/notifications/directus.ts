@@ -20,6 +20,7 @@ import {
   BrowserPushSubscriptionDeleteInput,
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
+  BrowserPushSubscriptionPreferenceInput,
   BrowserPushSubscriptionRecord,
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionSearchResult,
@@ -606,18 +607,12 @@ async function listActiveBrowserSubscriptionsForFilter(
   field: "user_id" | "user_email",
   value: string,
   input: NotificationRequestInput,
-  limit = 25
+  limit = 500
 ): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set(`filter[${field}][_eq]`, value);
-  if (input.organization_id) {
-    params.set("filter[organization_id][_eq]", input.organization_id);
-  }
-  if (input.app_id) {
-    params.set("filter[app_id][_eq]", input.app_id);
-  }
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(limit));
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
@@ -647,7 +642,7 @@ async function resolveBrowserPushRecipient(
     candidates = await listActiveBrowserSubscriptionsForFilter("user_email", email, input);
   }
 
-  const subscription = preferredBrowserSubscriptionRecord(candidates);
+  const subscription = preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
   if (!subscription?.id) {
     const target = userId || email || recipient.id || recipient.address || recipient.type;
     throw Object.assign(new Error(`No active browser push subscription was found for notification recipient ${target}.`), { status: 404 });
@@ -1143,6 +1138,7 @@ const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
   "status",
   "user_id",
   "user_email",
+  "is_preferred",
   "organization_id",
   "app_id",
   "permission",
@@ -1179,34 +1175,6 @@ async function findBrowserSubscriptionById(id: string): Promise<BrowserPushSubsc
   return response.data?.[0] ?? null;
 }
 
-async function assertBrowserSubscriptionEmailAvailable(
-  email: string | undefined,
-  currentRecordId?: string | null
-): Promise<void> {
-  const normalizedEmail = normalizedIdentityPart(email);
-  if (!normalizedEmail) {
-    return;
-  }
-  const params = new URLSearchParams();
-  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
-  params.set("filter[user_email][_icontains]", normalizedEmail);
-  params.set("limit", "100");
-  addDirectusReadCacheBust(params);
-  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
-    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
-  );
-  const conflict = (response.data ?? []).find((record) =>
-    normalizedIdentityPart(record.user_email) === normalizedEmail &&
-    asString(record.id) !== asString(currentRecordId)
-  );
-  if (conflict) {
-    throw Object.assign(
-      new Error("This email address is already subscribed. Unsubscribe the existing browser before using it again."),
-      { status: 409 }
-    );
-  }
-}
-
 async function listBrowserSubscriptionsForPersistentIdentity(
   identity: BrowserSubscriptionPersistentIdentity,
   limit = 100
@@ -1239,7 +1207,13 @@ function browserSubscriptionTime(record: BrowserPushSubscriptionRecord): number 
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function browserSubscriptionRank(record: BrowserPushSubscriptionRecord): number {
+function browserSubscriptionRank(record: BrowserPushSubscriptionRecord, browserInstallationId = ""): number {
+  if (record.is_preferred === true) {
+    return 100;
+  }
+  if (browserInstallationId && asString(record.browser_installation_id) === browserInstallationId) {
+    return 50;
+  }
   if (record.status === "active" && record.endpoint_hash) {
     return 4;
   }
@@ -1252,15 +1226,18 @@ function browserSubscriptionRank(record: BrowserPushSubscriptionRecord): number 
   return 1;
 }
 
-function preferredBrowserSubscriptionRecord(records: BrowserPushSubscriptionRecord[]): BrowserPushSubscriptionRecord | null {
+function preferredBrowserSubscriptionRecord(
+  records: BrowserPushSubscriptionRecord[],
+  browserInstallationId = ""
+): BrowserPushSubscriptionRecord | null {
   let selected: BrowserPushSubscriptionRecord | null = null;
   for (const record of records) {
     if (!selected) {
       selected = record;
       continue;
     }
-    const rank = browserSubscriptionRank(record);
-    const selectedRank = browserSubscriptionRank(selected);
+    const rank = browserSubscriptionRank(record, browserInstallationId);
+    const selectedRank = browserSubscriptionRank(selected, browserInstallationId);
     if (rank > selectedRank || (rank === selectedRank && browserSubscriptionTime(record) > browserSubscriptionTime(selected))) {
       selected = record;
     }
@@ -1446,6 +1423,7 @@ function browserSubscriptionSearchResult(record: BrowserPushSubscriptionRecord):
     browser_installation_id: record.browser_installation_id || null,
     user_id: record.user_id || null,
     user_email: record.user_email || null,
+    is_preferred: record.is_preferred === true,
     display_name: browserSubscriptionDisplayName(record) || null,
     organization_id: idFromRelation(record.organization_id) || null,
     app_id: idFromRelation(record.app_id) || null,
@@ -1462,9 +1440,9 @@ export async function searchBrowserPushSubscriptions(
 ): Promise<BrowserPushSubscriptionSearchResult[]> {
   const query = asString(input.query).toLowerCase();
   const field = asString(input.field, "all");
-  const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 25)));
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 25)));
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,status,user_id,user_email,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", asString(input.status, "active"));
   params.set("filter[organization_id][_eq]", input.organization_id);
   params.set("filter[app_id][_eq]", input.app_id);
@@ -1494,6 +1472,7 @@ const BROWSER_SUBSCRIPTION_BROWSE_FIELDS = [
   "expiration_time",
   "user_id",
   "user_email",
+  "is_preferred",
   "organization_id",
   "app_id",
   "permission",
@@ -2000,6 +1979,46 @@ export async function resolveBrowserPushSubscriptionOwnership(
   return existing;
 }
 
+export async function setPreferredBrowserPushSubscription(
+  input: BrowserPushSubscriptionPreferenceInput
+): Promise<BrowserPushSubscriptionRecord> {
+  const selected = await findBrowserSubscriptionById(input.browser_subscription_id);
+  if (!selected?.id || selected.status !== "active" || !selected.endpoint_hash) {
+    throw Object.assign(new Error("The preferred browser subscription must be active."), { status: 409 });
+  }
+
+  const suppliedUserId = normalizedIdentityPart(input.user_id);
+  const suppliedEmail = normalizedIdentityPart(input.user_email);
+  const selectedUserId = normalizedIdentityPart(selected.user_id);
+  const selectedEmail = normalizedIdentityPart(selected.user_email);
+  const identityMatches = suppliedUserId
+    ? selectedUserId === suppliedUserId
+    : Boolean(suppliedEmail && selectedEmail === suppliedEmail && !selectedUserId);
+  if (!identityMatches) {
+    throw Object.assign(new Error("The browser subscription does not belong to this user."), { status: 403 });
+  }
+
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+  params.set(`filter[${suppliedUserId ? "user_id" : "user_email"}][_eq]`, suppliedUserId || suppliedEmail);
+  params.set("limit", "500");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  const matching = (response.data ?? []).filter((record) => suppliedUserId
+    ? normalizedIdentityPart(record.user_id) === suppliedUserId
+    : !normalizedIdentityPart(record.user_id) && normalizedIdentityPart(record.user_email) === suppliedEmail
+  );
+  for (const record of matching) {
+    if (record.id && record.id !== selected.id && record.is_preferred === true) {
+      await patchBrowserSubscription(record.id, { is_preferred: false });
+    }
+  }
+  const patched = await patchBrowserSubscription(selected.id, { is_preferred: true });
+  return patched ?? { ...selected, is_preferred: true };
+}
+
 async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   const now = new Date().toISOString();
   const subscription = input.subscription;
@@ -2024,7 +2043,6 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     assertBrowserSubscriptionMatchesInstallation(existingById, input);
     const existing = existingById ?? await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
     assertBrowserSubscriptionCanUpdate(existing, input);
-    await assertBrowserSubscriptionEmailAvailable(input.user_email, existing?.id);
     const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
@@ -2096,7 +2114,6 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     : null;
   const existing = byId ?? byEndpoint ??
     (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
-  await assertBrowserSubscriptionEmailAvailable(input.user_email, existing?.id);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -2250,10 +2267,6 @@ async function supersedeOtherBrowserSubscriptions(current: BrowserPushSubscripti
     if (browserInstallationId) {
       addRecords(await listBrowserSubscriptionsForInstallation(browserInstallationId));
     }
-    const identity = browserSubscriptionPersistentIdentityFromRecord(current);
-    if (identity) {
-      addRecords(await listBrowserSubscriptionsForPersistentIdentity(identity));
-    }
     return [...recordsById.values()].filter(isCurrentBrowserSubscriptionState);
   };
 
@@ -2305,10 +2318,6 @@ function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]
     if (installationId) {
       groupKeys.push(`installation:${installationId}`);
     }
-    const identity = browserSubscriptionPersistentIdentityFromRecord(record);
-    if (identity) {
-      groupKeys.push(`identity:${persistentIdentityKey(identity)}`);
-    }
     for (const groupKey of groupKeys) {
       const existing = latestByGroup.get(groupKey);
       latestByGroup.set(groupKey, existing ? newerBrowserSubscription(existing, record) : record);
@@ -2324,10 +2333,6 @@ function supersededBrowserSubscriptions(records: BrowserPushSubscriptionRecord[]
     const groupKeys: string[] = [];
     if (installationId) {
       groupKeys.push(`installation:${installationId}`);
-    }
-    const identity = browserSubscriptionPersistentIdentityFromRecord(record);
-    if (identity) {
-      groupKeys.push(`identity:${persistentIdentityKey(identity)}`);
     }
     const shouldSupersede = groupKeys.some((groupKey) => {
       const latest = latestByGroup.get(groupKey);

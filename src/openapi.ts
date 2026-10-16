@@ -22,6 +22,7 @@ export const openApiSpec = {
           organization_id: { type: "string" },
           app_id: { type: "string" },
           actor_user_id: { type: "string" },
+          browser_installation_id: { type: "string" },
           notification_key: { type: "string" },
           template_key: { type: "string" },
           locale: { type: "string" },
@@ -232,6 +233,16 @@ export const openApiSpec = {
           browser_subscription_client_secret: { type: "string", minLength: 32, maxLength: 512 }
         }
       },
+      BrowserPushSubscriptionPreferenceRequest: {
+        type: "object",
+        required: ["browser_subscription_id"],
+        additionalProperties: false,
+        properties: {
+          browser_subscription_id: { type: "string" },
+          user_id: { type: "string" },
+          user_email: { type: "string", format: "email" }
+        }
+      },
       BrowserPushSubscriptionSearchRequest: {
         type: "object",
         required: ["organization_id", "app_id"],
@@ -242,7 +253,7 @@ export const openApiSpec = {
           organization_id: { type: "string" },
           app_id: { type: "string" },
           status: { type: "string" },
-          limit: { type: "integer", minimum: 1, maximum: 100 }
+          limit: { type: "integer", minimum: 1, maximum: 500 }
         }
       },
       BrowserPushSubscriptionSearchResponse: {
@@ -262,6 +273,7 @@ export const openApiSpec = {
                 browser_installation_id: { type: "string", nullable: true },
                 user_id: { type: "string", nullable: true },
                 user_email: { type: "string", nullable: true },
+                is_preferred: { type: "boolean" },
                 display_name: { type: "string", nullable: true },
                 organization_id: { type: "string", nullable: true },
                 app_id: { type: "string", nullable: true },
@@ -706,6 +718,30 @@ export const openApiSpec = {
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionStatsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/preferred": {
+      post: {
+        operationId: "setPreferredBrowserSubscription",
+        summary: "Choose the preferred browser Web Push subscription for a user.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionPreferenceRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "The preferred browser subscription was updated.",
+            content: {
+              "application/json": {
+                schema: { type: "object", additionalProperties: true }
               }
             }
           }

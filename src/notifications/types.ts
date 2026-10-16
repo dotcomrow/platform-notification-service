@@ -23,6 +23,7 @@ export type NotificationRequestInput = {
   organization_id?: string;
   app_id?: string;
   actor_user_id?: string;
+  browser_installation_id?: string;
   notification_key?: string;
   template_key?: string;
   locale?: string;
@@ -220,6 +221,12 @@ export type BrowserPushSubscriptionDeleteInput = {
   browser_subscription_client_secret: string;
 };
 
+export type BrowserPushSubscriptionPreferenceInput = {
+  browser_subscription_id: string;
+  user_id?: string;
+  user_email?: string;
+};
+
 export type BrowserPushSubscriptionSearchField = "all" | "id" | "user_id" | "email" | "name";
 
 export type BrowserPushSubscriptionSearchInput = {
@@ -236,6 +243,7 @@ export type BrowserPushSubscriptionSearchResult = {
   browser_installation_id?: string | null;
   user_id?: string | null;
   user_email?: string | null;
+  is_preferred?: boolean | null;
   display_name?: string | null;
   organization_id?: string | null;
   app_id?: string | null;
@@ -345,6 +353,7 @@ export type BrowserPushSubscriptionRecord = {
   auth?: string | null;
   user_id?: string | null;
   user_email?: string | null;
+  is_preferred?: boolean | null;
   user_phone?: string | null;
   organization_id?: string | PlatformOrganization | null;
   app_id?: string | PlatformApp | null;
