@@ -245,6 +245,8 @@ export type BrowserPushSubscriptionSearchResult = {
   user_email?: string | null;
   is_preferred?: boolean | null;
   display_name?: string | null;
+  user_agent?: string | null;
+  source?: string | null;
   organization_id?: string | null;
   app_id?: string | null;
   status?: string | null;

@@ -1428,6 +1428,8 @@ function browserSubscriptionSearchResult(record: BrowserPushSubscriptionRecord):
     user_email: record.user_email || null,
     is_preferred: record.is_preferred === true,
     display_name: browserSubscriptionDisplayName(record) || null,
+    user_agent: record.user_agent || null,
+    source: record.source || null,
     organization_id: idFromRelation(record.organization_id) || null,
     app_id: idFromRelation(record.app_id) || null,
     status: record.status || null,
@@ -1445,7 +1447,7 @@ export async function searchBrowserPushSubscriptions(
   const field = asString(input.field, "all");
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 25)));
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", asString(input.status, "active"));
   params.set("filter[organization_id][_eq]", input.organization_id);
   params.set("filter[app_id][_eq]", input.app_id);

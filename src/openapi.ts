@@ -275,6 +275,8 @@ export const openApiSpec = {
                 user_email: { type: "string", nullable: true },
                 is_preferred: { type: "boolean" },
                 display_name: { type: "string", nullable: true },
+                user_agent: { type: "string", nullable: true },
+                source: { type: "string", nullable: true },
                 organization_id: { type: "string", nullable: true },
                 app_id: { type: "string", nullable: true },
                 status: { type: "string", nullable: true },
