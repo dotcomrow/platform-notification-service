@@ -612,13 +612,16 @@ async function listActiveBrowserSubscriptionsForFilter(
   const params = new URLSearchParams();
   params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
-  params.set(`filter[${field}][_eq]`, value);
+  params.set(`filter[${field}][${field === "user_email" ? "_icontains" : "_eq"}]`, value);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
   params.set("limit", String(limit));
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
-  return response.data ?? [];
+  const records = response.data ?? [];
+  return field === "user_email"
+    ? records.filter((record) => normalizedIdentityPart(record.user_email) === normalizedIdentityPart(value))
+    : records;
 }
 
 async function resolveBrowserPushRecipient(
@@ -635,11 +638,11 @@ async function resolveBrowserPushRecipient(
   const userId = recipientUserId(recipient);
   const email = recipientEmail(recipient);
   let candidates: BrowserPushSubscriptionRecord[] = [];
-  if (userId) {
-    candidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId, input);
-  }
-  if (candidates.length === 0 && email) {
+  if (email) {
     candidates = await listActiveBrowserSubscriptionsForFilter("user_email", email, input);
+  }
+  if (candidates.length === 0 && userId) {
+    candidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId, input);
   }
 
   const subscription = preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
@@ -1991,24 +1994,24 @@ export async function setPreferredBrowserPushSubscription(
   const suppliedEmail = normalizedIdentityPart(input.user_email);
   const selectedUserId = normalizedIdentityPart(selected.user_id);
   const selectedEmail = normalizedIdentityPart(selected.user_email);
-  const identityMatches = suppliedUserId
-    ? selectedUserId === suppliedUserId
-    : Boolean(suppliedEmail && selectedEmail === suppliedEmail && !selectedUserId);
+  const identityMatches = suppliedEmail
+    ? selectedEmail === suppliedEmail
+    : Boolean(suppliedUserId && selectedUserId === suppliedUserId);
   if (!identityMatches) {
     throw Object.assign(new Error("The browser subscription does not belong to this user."), { status: 403 });
   }
 
   const params = new URLSearchParams();
   params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
-  params.set(`filter[${suppliedUserId ? "user_id" : "user_email"}][_eq]`, suppliedUserId || suppliedEmail);
+  params.set(`filter[${suppliedEmail ? "user_email" : "user_id"}][${suppliedEmail ? "_icontains" : "_eq"}]`, suppliedEmail || suppliedUserId);
   params.set("limit", "500");
   addDirectusReadCacheBust(params);
   const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
   );
-  const matching = (response.data ?? []).filter((record) => suppliedUserId
-    ? normalizedIdentityPart(record.user_id) === suppliedUserId
-    : !normalizedIdentityPart(record.user_id) && normalizedIdentityPart(record.user_email) === suppliedEmail
+  const matching = (response.data ?? []).filter((record) => suppliedEmail
+    ? normalizedIdentityPart(record.user_email) === suppliedEmail
+    : normalizedIdentityPart(record.user_id) === suppliedUserId
   );
   for (const record of matching) {
     if (record.id && record.id !== selected.id && record.is_preferred === true) {
