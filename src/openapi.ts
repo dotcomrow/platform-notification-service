@@ -426,7 +426,11 @@ export const openApiSpec = {
           browser_subscription_id: { type: "string", nullable: true },
           status: { type: "string" },
           permission: { type: "string" },
-          fallback_channels: { type: "array", items: { type: "string" } }
+          fallback_channels: { type: "array", items: { type: "string" } },
+          email_validation_id: { type: "string", format: "uuid", nullable: true },
+          email_validation_status: { type: "string", enum: ["pending", "validated", "failed", "expired"], nullable: true },
+          email_validation_checked_at: { type: "string", format: "date-time", nullable: true },
+          email_validation_error: { type: "string", nullable: true }
         }
       },
       BrowserPushPublicKeyResponse: {

@@ -1,9 +1,11 @@
-import { Kafka, logLevel, Producer } from "kafkajs";
+import { Consumer, Kafka, logLevel, Producer } from "kafkajs";
 import { config } from "../config.js";
 import { JsonRecord, truncate } from "./json.js";
 import { optionalVaultValue } from "./vault.js";
 
 let producerPromise: Promise<Producer> | null = null;
+let consumerPromise: Promise<Consumer> | null = null;
+let consumerState: { ready: boolean; topic?: string; groupId?: string; error?: string } = { ready: false };
 
 async function kafkaCredentials(): Promise<{ username: string; password: string } | null> {
   const username = config.kafkaUsername || await optionalVaultValue(config.kafkaUsernameVaultPath, config.kafkaUsernameVaultKey);
@@ -39,6 +41,85 @@ async function createProducer(): Promise<Producer> {
   const producer = kafka.producer();
   await producer.connect();
   return producer;
+}
+
+async function createKafka(): Promise<Kafka> {
+  const credentials = await kafkaCredentials();
+  const sasl = credentials
+    ? config.kafkaSaslMechanism === "plain"
+      ? { mechanism: "plain" as const, username: credentials.username, password: credentials.password }
+      : config.kafkaSaslMechanism === "scram-sha-512"
+        ? { mechanism: "scram-sha-512" as const, username: credentials.username, password: credentials.password }
+        : { mechanism: "scram-sha-256" as const, username: credentials.username, password: credentials.password }
+    : undefined;
+  return new Kafka({
+    clientId: config.kafkaClientId,
+    brokers: config.kafkaBrokers,
+    ssl: config.kafkaSsl,
+    logLevel: logLevel.WARN,
+    ...(sasl ? { sasl } : {})
+  });
+}
+
+export async function runJsonConsumer(
+  topic: string,
+  groupId: string,
+  handler: (payload: JsonRecord) => Promise<void>
+): Promise<void> {
+  if (!config.kafkaEnabled) {
+    return;
+  }
+  const kafka = await createKafka();
+  const consumer = kafka.consumer({ groupId });
+  consumerPromise = Promise.resolve(consumer);
+  consumerState = { ready: false, topic, groupId };
+  consumer.on(consumer.events.GROUP_JOIN, () => {
+    consumerState = { ready: true, topic, groupId };
+  });
+  let finishConsumer: (() => void) | null = null;
+  let failConsumer: ((error: Error) => void) | null = null;
+  const lifecycle = new Promise<void>((resolve, reject) => {
+    finishConsumer = resolve;
+    failConsumer = reject;
+  });
+  consumer.on(consumer.events.CRASH, ({ payload }) => {
+    consumerState = { ready: false, topic, groupId, error: truncate(payload.error.message, 500) };
+    if (!payload.restart) {
+      failConsumer?.(payload.error);
+    }
+  });
+  consumer.on(consumer.events.DISCONNECT, () => {
+    consumerState = { ...consumerState, ready: false };
+  });
+  consumer.on(consumer.events.STOP, () => {
+    finishConsumer?.();
+  });
+  await consumer.connect();
+  await consumer.subscribe({ topic, fromBeginning: false });
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      const text = message.value?.toString("utf8") || "";
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Kafka event payload must be a JSON object.");
+      }
+      await handler(parsed as JsonRecord);
+    }
+  });
+  await lifecycle;
+}
+
+export function kafkaConsumerReady(): { ok: boolean; enabled: boolean; topic?: string; group_id?: string; error?: string } {
+  if (!config.kafkaEnabled) {
+    return { ok: true, enabled: false };
+  }
+  return {
+    ok: consumerState.ready,
+    enabled: true,
+    topic: consumerState.topic,
+    group_id: consumerState.groupId,
+    ...(consumerState.error ? { error: consumerState.error } : {})
+  };
 }
 
 async function producer(): Promise<Producer> {
@@ -81,13 +162,20 @@ export async function kafkaReady(): Promise<{ ok: boolean; enabled: boolean; err
 }
 
 process.on("beforeExit", async () => {
-  if (!producerPromise) {
-    return;
+  if (producerPromise) {
+    try {
+      const activeProducer = await producerPromise;
+      await activeProducer.disconnect();
+    } catch {
+      // Process shutdown should not be blocked by producer cleanup.
+    }
   }
-  try {
-    const activeProducer = await producerPromise;
-    await activeProducer.disconnect();
-  } catch {
-    // Process shutdown should not be blocked by producer cleanup.
+  if (consumerPromise) {
+    try {
+      const activeConsumer = await consumerPromise;
+      await activeConsumer.disconnect();
+    } catch {
+      // Process shutdown should not be blocked by consumer cleanup.
+    }
   }
 });

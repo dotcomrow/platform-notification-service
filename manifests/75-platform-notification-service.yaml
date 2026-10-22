@@ -389,6 +389,14 @@ spec:
               value: "500"
             - name: DIRECTUS_BASE_URL
               value: "http://directus-service.directus.svc.cluster.local:8055"
+            - name: CRM_API_URL
+              value: "http://suncoast-crm-api.crm.svc.cluster.local:8080"
+            - name: CRM_EMAIL_VALIDATION_PURPOSE
+              value: "notifications"
+            - name: CRM_EMAIL_VALIDATION_EVENT_TOPIC
+              value: "crm.email-validation.events.v1"
+            - name: CRM_EMAIL_VALIDATION_CONSUMER_GROUP
+              value: "platform-notification-email-validation-v1"
             - name: DIRECTUS_TOKEN_VAULT_PATH
               value: "secret/data/directus/platform-notification-service"
             - name: DIRECTUS_TOKEN_VAULT_KEY

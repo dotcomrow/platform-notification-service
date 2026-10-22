@@ -243,6 +243,10 @@ export type BrowserPushSubscriptionSearchResult = {
   browser_installation_id?: string | null;
   user_id?: string | null;
   user_email?: string | null;
+  email_validation_id?: string | null;
+  email_validation_status?: "pending" | "validated" | "failed" | "expired" | null;
+  email_validation_checked_at?: string | null;
+  email_validation_error?: string | null;
   is_preferred?: boolean | null;
   display_name?: string | null;
   user_agent?: string | null;
@@ -355,6 +359,10 @@ export type BrowserPushSubscriptionRecord = {
   auth?: string | null;
   user_id?: string | null;
   user_email?: string | null;
+  email_validation_id?: string | null;
+  email_validation_status?: "pending" | "validated" | "failed" | "expired" | null;
+  email_validation_checked_at?: string | null;
+  email_validation_error?: string | null;
   is_preferred?: boolean | null;
   user_phone?: string | null;
   organization_id?: string | PlatformOrganization | null;

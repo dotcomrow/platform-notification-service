@@ -2,8 +2,10 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { DirectusItemResponse, DirectusListResponse, directusJson, queryString } from "../lib/directus.js";
 import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "../lib/json.js";
+import { requestEmailValidation } from "./email-validation.js";
 import {
   NotificationContext,
+  NotificationChannel,
   NotificationDeliveryAttemptInput,
   NotificationDeliveryAttemptRecord,
   NotificationRecipientHint,
@@ -549,8 +551,10 @@ export async function enrichNotificationRequest(input: NotificationRequestInput)
     organization_id: organizationId || input.organization_id
   };
 
+  const renderedInput = await renderNotificationMessage(normalizedInput, context);
+  const browserResolvedInput = await resolveBrowserPushRecipients(renderedInput);
   return {
-    input: await renderNotificationMessage(await resolveBrowserPushRecipients(normalizedInput), context),
+    input: await suppressUnvalidatedEmailDeliveries(browserResolvedInput),
     context
   };
 }
@@ -575,6 +579,63 @@ function recipientEmail(recipient: NotificationRecipientHint): string {
     return asString(recipient.address) || asString(recipient.id);
   }
   return asString(recipient.address) || asString(recipient.data?.email) || asString(recipient.data?.user_email);
+}
+
+async function hasValidatedEmailSubscription(email: string): Promise<boolean> {
+  const normalizedEmail = normalizedIdentityPart(email);
+  if (!normalizedEmail) {
+    return false;
+  }
+  const params = new URLSearchParams();
+  params.set("fields", "id,user_email,email_validation_status");
+  params.set("filter[user_email][_icontains]", normalizedEmail);
+  params.set("filter[email_validation_status][_eq]", "validated");
+  params.set("limit", "25");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  return (response.data ?? []).some((record) =>
+    normalizedIdentityPart(record.user_email) === normalizedEmail
+    && record.email_validation_status === "validated"
+  );
+}
+
+async function suppressUnvalidatedEmailDeliveries(input: NotificationRequestInput): Promise<NotificationRequestInput> {
+  const recipients: NotificationRecipientHint[] = [];
+  for (const recipient of input.recipients) {
+    const channels = recipientChannels(input, recipient) as NotificationChannel[];
+    if (!channels.includes("email")) {
+      recipients.push({ ...recipient, channels });
+      continue;
+    }
+    const validationRequired = asBoolean(recipient.data?.email_validation_required);
+    if (!validationRequired || input.event_key === "crm.external-signup.email-confirmation") {
+      recipients.push({ ...recipient, channels });
+      continue;
+    }
+    const email = recipientEmail(recipient);
+    if (email && await hasValidatedEmailSubscription(email)) {
+      recipients.push({ ...recipient, channels });
+      continue;
+    }
+    const allowedChannels = channels.filter((channel) => channel !== "email");
+    if (allowedChannels.length > 0) {
+      recipients.push({
+        ...recipient,
+        channels: allowedChannels,
+        data: {
+          ...(recipient.data ?? {}),
+          email_delivery_suppressed: true,
+          email_delivery_suppressed_reason: "email_validation_required"
+        }
+      });
+    }
+  }
+  if (recipients.length === 0) {
+    throw Object.assign(new Error("Email delivery requires a validated email subscription."), { status: 409 });
+  }
+  return { ...input, recipients };
 }
 
 function browserSubscriptionRecipient(
@@ -628,8 +689,11 @@ async function resolveBrowserPushRecipient(
   input: NotificationRequestInput,
   recipient: NotificationRecipientHint
 ): Promise<NotificationRecipientHint> {
-  if (!recipientWantsBrowserPush(input, recipient) || recipient.type === "browser_subscription") {
+  if (!recipientWantsBrowserPush(input, recipient)) {
     return recipient;
+  }
+  if (recipient.type === "browser_subscription") {
+    return { ...recipient, channels: ["browser_push"] };
   }
   if (recipient.type !== "user" && recipient.type !== "email") {
     return recipient;
@@ -654,12 +718,27 @@ async function resolveBrowserPushRecipient(
 }
 
 async function resolveBrowserPushRecipients(input: NotificationRequestInput): Promise<NotificationRequestInput> {
-  if (!input.channels.includes("browser_push")) {
+  if (!input.channels.includes("browser_push") && !input.recipients.some((recipient) => recipient.channels?.includes("browser_push"))) {
     return input;
   }
   const recipients: NotificationRecipientHint[] = [];
   for (const recipient of input.recipients) {
-    recipients.push(await resolveBrowserPushRecipient(input, recipient));
+    const channels = recipientChannels(input, recipient) as NotificationChannel[];
+    const resolved = await resolveBrowserPushRecipient(input, recipient);
+    recipients.push(resolved);
+    const nonBrowserChannels = channels.filter((channel) => channel !== "browser_push");
+    if (resolved.type === "browser_subscription" && nonBrowserChannels.length > 0) {
+      recipients.push({
+        ...recipient,
+        channels: nonBrowserChannels,
+        data: {
+          ...(recipient.data ?? {}),
+          email_validation_required: nonBrowserChannels.includes("email"),
+          browser_subscription_id: resolved.id,
+          resolved_browser_installation_id: resolved.data?.browser_installation_id
+        }
+      });
+    }
   }
   return { ...input, recipients };
 }
@@ -1141,6 +1220,10 @@ const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
   "status",
   "user_id",
   "user_email",
+  "email_validation_id",
+  "email_validation_status",
+  "email_validation_checked_at",
+  "email_validation_error",
   "is_preferred",
   "organization_id",
   "app_id",
@@ -1942,11 +2025,262 @@ async function findBrowserSubscriptionAfterEndpointConflict(
   return null;
 }
 
+function browserSubscriptionEmailValidationPayload(
+  existing: BrowserPushSubscriptionRecord | null,
+  email: string | undefined
+): Record<string, unknown> {
+  if (normalizedIdentityPart(existing?.user_email) === normalizedIdentityPart(email)) {
+    return {
+      email_validation_id: existing?.email_validation_id || null,
+      email_validation_status: existing?.email_validation_status || null,
+      email_validation_checked_at: existing?.email_validation_checked_at || null,
+      email_validation_error: existing?.email_validation_error || null
+    };
+  }
+  return {
+    email_validation_id: null,
+    email_validation_status: null,
+    email_validation_checked_at: null,
+    email_validation_error: null
+  };
+}
+
 export async function upsertBrowserPushSubscription(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
   return withBrowserSubscriptionUpsertLock(
     browserSubscriptionUpsertLockKeys(input),
-    () => upsertBrowserPushSubscriptionUnlocked(input)
+    async () => synchronizeBrowserSubscriptionEmailValidation(
+      await upsertBrowserPushSubscriptionUnlocked(input),
+      input
+    )
   );
+}
+
+async function synchronizeBrowserSubscriptionEmailValidation(
+  record: BrowserPushSubscriptionRecord,
+  input: BrowserPushSubscriptionInput
+): Promise<BrowserPushSubscriptionRecord> {
+  const email = normalizedIdentityPart(record.user_email || input.user_email);
+  if (!record.id || !email) {
+    return record;
+  }
+
+  const currentStatus = asString(record.email_validation_status).toLowerCase();
+  if (currentStatus === "validated") {
+    return record;
+  }
+  if (currentStatus === "pending" && record.email_validation_id) {
+    return record;
+  }
+  const sharedValidation = await findReusableEmailValidation(email, record.id);
+  if (sharedValidation?.email_validation_id && sharedValidation.email_validation_status) {
+    const patched = await patchBrowserSubscription(record.id, {
+      email_validation_id: sharedValidation.email_validation_id,
+      email_validation_status: sharedValidation.email_validation_status,
+      email_validation_checked_at: sharedValidation.email_validation_checked_at || new Date().toISOString(),
+      email_validation_error: null
+    });
+    if (sharedValidation.email_validation_status === "pending") {
+      await ensureEmailValidationSubscription(sharedValidation.email_validation_id, email, record.id);
+    }
+    return patched ?? {
+      ...record,
+      email_validation_id: sharedValidation.email_validation_id,
+      email_validation_status: sharedValidation.email_validation_status,
+      email_validation_checked_at: sharedValidation.email_validation_checked_at || new Date().toISOString(),
+      email_validation_error: null
+    };
+  }
+  const retryTerminalValidation = asString(input.capabilities.reason) === "browser_push_registered"
+    && (currentStatus === "failed" || currentStatus === "expired");
+  try {
+    const validation = await requestEmailValidation({
+      subscriptionId: record.id,
+      email,
+      userId: record.user_id,
+      attemptKey: retryTerminalValidation
+        ? sha256(`${record.email_validation_id || "terminal"}:${record.email_validation_checked_at || "unchecked"}`).slice(0, 20)
+        : "initial"
+    });
+    const patched = await patchBrowserSubscription(record.id, {
+      email_validation_id: validation.id,
+      email_validation_status: validation.status,
+      email_validation_checked_at: validation.checkedAt,
+      email_validation_error: null
+    });
+    await ensureEmailValidationSubscription(validation.id, email, record.id);
+    return patched ?? {
+      ...record,
+      email_validation_id: validation.id,
+      email_validation_status: validation.status,
+      email_validation_checked_at: validation.checkedAt,
+      email_validation_error: null
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Email validation request failed.";
+    const checkedAt = new Date().toISOString();
+    const failedStatus = record.email_validation_id && !retryTerminalValidation
+      ? (record.email_validation_status || "pending")
+      : "failed";
+    const patched = await patchBrowserSubscription(record.id, {
+      email_validation_status: failedStatus,
+      email_validation_checked_at: checkedAt,
+      email_validation_error: truncate(message, 1000)
+    });
+    return patched ?? {
+      ...record,
+      email_validation_status: failedStatus,
+      email_validation_checked_at: checkedAt,
+      email_validation_error: truncate(message, 1000)
+    };
+  }
+}
+
+const EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION = "platform_email_validation_subscriptions";
+
+async function findReusableEmailValidation(
+  email: string,
+  excludedRecordId: string
+): Promise<BrowserPushSubscriptionRecord | null> {
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+  params.set("filter[user_email][_icontains]", email);
+  params.set("sort", "-email_validation_checked_at,-date_updated,-date_created");
+  params.set("limit", "50");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  const exact = (response.data ?? []).filter((candidate) =>
+    candidate.id !== excludedRecordId
+    && normalizedIdentityPart(candidate.user_email) === email
+    && Boolean(candidate.email_validation_id)
+    && (candidate.email_validation_status === "validated" || candidate.email_validation_status === "pending")
+  );
+  return exact.find((candidate) => candidate.email_validation_status === "validated")
+    ?? exact.find((candidate) => candidate.email_validation_status === "pending")
+    ?? null;
+}
+
+async function ensureEmailValidationSubscription(
+  validationId: string,
+  email: string,
+  browserSubscriptionId: string
+): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("fields", "id");
+  params.set("filter[validation_id][_eq]", validationId);
+  params.set("filter[target_collection][_eq]", config.notificationBrowserSubscriptionCollection);
+  params.set("filter[target_record_id][_eq]", browserSubscriptionId);
+  params.set("limit", "1");
+  addDirectusReadCacheBust(params);
+  const existing = await directusJson<DirectusListResponse<{ id: string }>>(
+    `/items/${EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION}?${params.toString()}`
+  );
+  if (existing.data?.[0]?.id) {
+    return;
+  }
+  await directusJson<DirectusItemResponse<{ id: string }>>(`/items/${EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION}`, {
+    method: "POST",
+    body: {
+      id: randomUUID(),
+      validation_id: validationId,
+      email,
+      target_collection: config.notificationBrowserSubscriptionCollection,
+      target_record_id: browserSubscriptionId,
+      status: "active",
+      date_created: new Date().toISOString()
+    }
+  });
+}
+
+type EmailValidationSubscriptionRecord = {
+  id: string;
+  validation_id?: string | null;
+  target_collection?: string | null;
+  target_record_id?: string | null;
+  status?: string | null;
+};
+
+export async function applyEmailValidationEvent(event: JsonRecord): Promise<number> {
+  const validationId = asString(event.validationId || event.validation_id);
+  const outcome = asString(event.outcome || event.status).toLowerCase();
+  const status = outcome === "validated" || outcome === "failed" || outcome === "expired"
+    ? outcome
+    : "";
+  if (!validationId || !status) {
+    throw new Error("CRM email validation event is missing validationId or a terminal outcome.");
+  }
+
+  const directParams = new URLSearchParams();
+  directParams.set("fields", "id,email_validation_id,email_validation_status");
+  directParams.set("filter[email_validation_id][_eq]", validationId);
+  directParams.set("limit", "500");
+  addDirectusReadCacheBust(directParams);
+  const directTargets = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${directParams.toString()}`
+  );
+  const updatedTargetIds = new Set<string>();
+  const eventTime = asString(event.occurredAt || event.occurred_at) || new Date().toISOString();
+  for (const target of directTargets.data ?? []) {
+    if (!target.id) {
+      continue;
+    }
+    await patchBrowserSubscription(target.id, {
+      email_validation_status: status,
+      email_validation_checked_at: eventTime,
+      email_validation_error: null
+    });
+    updatedTargetIds.add(target.id);
+  }
+
+  const params = new URLSearchParams();
+  params.set("fields", "id,validation_id,target_collection,target_record_id,status");
+  params.set("filter[validation_id][_eq]", validationId);
+  params.set("filter[status][_eq]", "active");
+  params.set("limit", "500");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<EmailValidationSubscriptionRecord>>(
+    `/items/${EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION}?${params.toString()}`
+  );
+  let updated = 0;
+  for (const subscription of response.data ?? []) {
+    if (
+      subscription.target_collection !== config.notificationBrowserSubscriptionCollection
+      || !subscription.target_record_id
+    ) {
+      await directusJson<unknown>(`/items/${EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION}/${encodeURIComponent(subscription.id)}`, {
+        method: "PATCH",
+        body: {
+          status: "failed",
+          error_message: "Unsupported email validation subscription target.",
+          last_event_json: redactJsonRecord(event),
+          date_updated: new Date().toISOString()
+        }
+      });
+      continue;
+    }
+    const now = new Date().toISOString();
+    if (!updatedTargetIds.has(subscription.target_record_id)) {
+      await patchBrowserSubscription(subscription.target_record_id, {
+        email_validation_status: status,
+        email_validation_checked_at: eventTime,
+        email_validation_error: null
+      });
+      updatedTargetIds.add(subscription.target_record_id);
+    }
+    await directusJson<unknown>(`/items/${EMAIL_VALIDATION_SUBSCRIPTION_COLLECTION}/${encodeURIComponent(subscription.id)}`, {
+      method: "PATCH",
+      body: {
+        status: "processed",
+        last_event_json: redactJsonRecord(event),
+        processed_at: now,
+        error_message: null,
+        date_updated: now
+      }
+    });
+    updated = updatedTargetIds.size;
+  }
+  return Math.max(updated, updatedTargetIds.size);
 }
 
 export async function deleteBrowserPushSubscription(input: BrowserPushSubscriptionDeleteInput): Promise<boolean> {
@@ -2053,6 +2387,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       browser_installation_id: input.browser_installation_id,
       user_id: input.user_id || null,
       user_email: input.user_email || null,
+      ...browserSubscriptionEmailValidationPayload(existing, input.user_email),
       user_phone: input.user_phone || null,
       ...browserSubscriptionRelationPayload(input, existing),
       permission: input.permission,
@@ -2131,6 +2466,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     auth: subscription.keys.auth,
     user_id: input.user_id || null,
     user_email: input.user_email || null,
+    ...browserSubscriptionEmailValidationPayload(existing, input.user_email),
     user_phone: input.user_phone || null,
     ...browserSubscriptionRelationPayload(input, existing),
     permission: input.permission,

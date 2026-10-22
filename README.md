@@ -206,6 +206,10 @@ configurable through environment variables.
 - `auth`
 - `user_id`
 - `user_email`
+- `email_validation_id`
+- `email_validation_status`
+- `email_validation_checked_at`
+- `email_validation_error`
 - `user_phone`
 - `organization_id`
 - `app_id`
@@ -217,7 +221,7 @@ configurable through environment variables.
 - `status`
 - `last_seen_at`
 
-`user_email` is normalized by the service and enforced as case-insensitively unique by the Directus database schema. `metadata_json.notification_link.display_name` remains display metadata and is not the uniqueness key.
+`user_email` is normalized by the service and may be registered by multiple browsers. `metadata_json.notification_link.display_name` remains display metadata and is not an identity key. Browser push becomes active immediately; the service creates a CRM email-verification request plus a durable `platform_email_validation_subscriptions` listener record. The service consumes `crm.email-validation.events.v1` and propagates terminal outcomes to every registered target without polling CRM. Email delivery associated with a browser-subscription notification is suppressed until at least one subscription for the normalized address has `email_validation_status=validated`; transactional verification emails and unrelated email-only notifications are not gated by browser-subscription state.
 
 `platform_notification_templates`:
 
@@ -268,6 +272,10 @@ Future collection set:
 Important environment variables:
 
 - `DIRECTUS_BASE_URL`
+- `CRM_API_URL`
+- `CRM_EMAIL_VALIDATION_PURPOSE`
+- `CRM_EMAIL_VALIDATION_EVENT_TOPIC`
+- `CRM_EMAIL_VALIDATION_CONSUMER_GROUP`
 - `DIRECTUS_TOKEN_VAULT_PATH`
 - `BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_KEYS`
 - `BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX`

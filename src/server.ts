@@ -7,12 +7,13 @@ import { ZodError } from "zod";
 import { config } from "./config.js";
 import { enforceInternalAuth } from "./auth/internal-auth.js";
 import { directusHealth } from "./lib/directus.js";
-import { kafkaReady, publishJson } from "./lib/kafka.js";
+import { kafkaConsumerReady, kafkaReady, publishJson, runJsonConsumer } from "./lib/kafka.js";
 import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "./lib/json.js";
 import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
 import {
   cleanupBrowserPushSubscriptions,
+  applyEmailValidationEvent,
   deleteBrowserPushSubscription,
   createDeliveryAttempt,
   createNotificationRequest,
@@ -74,6 +75,30 @@ app.use(rateLimit({
     || req.path === "/openapi.json"
     || req.path.startsWith("/internal/")
 }));
+
+async function runEmailValidationEventListener(): Promise<void> {
+  if (!config.kafkaEnabled) {
+    console.log("[platform-notification-service] CRM email validation listener disabled because Kafka is disabled");
+    return;
+  }
+  while (true) {
+    try {
+      await runJsonConsumer(
+        config.crmEmailValidationEventTopic,
+        config.crmEmailValidationConsumerGroup,
+        async (event) => {
+          const updated = await applyEmailValidationEvent(event);
+          console.log(`[platform-notification-service] applied CRM email validation event validation_id=${asString(event.validationId || event.validation_id)} targets=${updated}`);
+        }
+      );
+    } catch (error) {
+      console.error(`[platform-notification-service] CRM email validation listener failed: ${error instanceof Error ? truncate(error.message, 1000) : "unknown error"}`);
+      await wait(30_000);
+    }
+  }
+}
+
+void runEmailValidationEventListener();
 
 function notificationQueuedPayload(recordId: string | null | undefined, duplicate: boolean, status: string, correlationId?: string | null) {
   return {
@@ -608,7 +633,9 @@ app.get("/readyz", async (_req, res) => {
   dependencies.directus = directus;
   const kafka = await kafkaReady();
   dependencies.kafka = kafka;
-  const ok = directus.ok && kafka.ok;
+  const emailValidationConsumer = kafkaConsumerReady();
+  dependencies.email_validation_consumer = emailValidationConsumer;
+  const ok = directus.ok && kafka.ok && emailValidationConsumer.ok;
   res.status(ok ? 200 : 503).json({
     ok,
     service: "platform-notification-service",
@@ -660,6 +687,10 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
       status: subscription.status,
       permission: subscription.permission || input.permission,
       fallback_channels: subscription.fallback_channels_json || input.fallback_channels,
+      email_validation_id: subscription.email_validation_id || null,
+      email_validation_status: subscription.email_validation_status || null,
+      email_validation_checked_at: subscription.email_validation_checked_at || null,
+      email_validation_error: subscription.email_validation_error || null,
       notification_link: notificationLink,
       notification_link_persisted: Boolean(
         notificationLink &&
@@ -698,6 +729,11 @@ app.post("/internal/browser-subscriptions/resolve", async (req, res, next) => {
       browser_installation_id: subscription.browser_installation_id,
       status: subscription.status,
       permission: subscription.permission,
+      user_email: subscription.user_email || null,
+      email_validation_id: subscription.email_validation_id || null,
+      email_validation_status: subscription.email_validation_status || null,
+      email_validation_checked_at: subscription.email_validation_checked_at || null,
+      email_validation_error: subscription.email_validation_error || null,
       notification_link: browserSubscriptionNotificationLink(subscription),
       last_seen_at: subscription.last_seen_at,
       date_updated: subscription.date_updated
