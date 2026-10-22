@@ -2096,7 +2096,6 @@ async function synchronizeBrowserSubscriptionEmailValidation(
     const validation = await requestEmailValidation({
       subscriptionId: record.id,
       email,
-      userId: record.user_id,
       attemptKey: retryTerminalValidation
         ? sha256(`${record.email_validation_id || "terminal"}:${record.email_validation_checked_at || "unchecked"}`).slice(0, 20)
         : "initial"

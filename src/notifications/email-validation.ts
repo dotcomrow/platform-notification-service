@@ -23,29 +23,34 @@ function normalizeStatus(value: unknown): EmailValidationStatus {
 export async function requestEmailValidation(input: {
   subscriptionId: string;
   email: string;
-  userId?: string | null;
   attemptKey?: string | null;
 }): Promise<EmailValidationResult> {
   const normalizedEmail = input.email.trim().toLowerCase();
   const emailKey = createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 20);
-  const response = await httpJson<unknown>(`${config.crmApiUrl}/v1/email-verifications`, {
+  const response = await httpJson<unknown>(`${config.crmApiUrl}/v1/external-signups/contacts`, {
     method: "POST",
     headers: {
       "idempotency-key": `notification-subscription:${input.subscriptionId}:${emailKey}:${input.attemptKey || "initial"}`,
       "x-correlation-id": input.subscriptionId
     },
     body: {
-      email: normalizedEmail,
       purpose: config.crmEmailValidationPurpose,
-      user_id: input.userId || undefined
+      properties: {
+        email: normalizedEmail,
+        email_verified: false
+      },
+      associations: {}
     },
     timeoutMs: config.requestTimeoutMs
   });
   const payload = asRecord(response.payload);
-  const id = asString(payload?.validation_id);
-  if (response.statusCode < 200 || response.statusCode >= 300 || !id) {
-    throw new Error(`CRM email validation request failed: HTTP ${response.statusCode} ${httpErrorMessage(response.payload, response.text)}`);
+  const verification = asRecord(payload?.email_verification);
+  const id = asString(verification?.validation_id);
+  const contactId = asString(payload?.entity_id);
+  const operationId = asString(payload?.operation_id);
+  if (response.statusCode < 200 || response.statusCode >= 300 || !id || !contactId || !operationId) {
+    throw new Error(`CRM contact signup failed: HTTP ${response.statusCode} ${httpErrorMessage(response.payload, response.text)}`);
   }
-  return { id, status: normalizeStatus(payload?.status), checkedAt: new Date().toISOString(), error: null };
+  return { id, status: normalizeStatus(verification?.status), checkedAt: new Date().toISOString(), error: null };
 }
 
