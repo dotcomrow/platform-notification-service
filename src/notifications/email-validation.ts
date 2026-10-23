@@ -37,6 +37,8 @@ export async function requestEmailValidation(input: {
       purpose: config.crmEmailValidationPurpose,
       properties: {
         email: normalizedEmail,
+        firstname: "Notification",
+        lastname: "Subscriber",
         email_verified: false
       },
       associations: {}
