@@ -401,6 +401,8 @@ spec:
               value: "secret/data/directus/platform-notification-service"
             - name: DIRECTUS_TOKEN_VAULT_KEY
               value: "token"
+            - name: DIRECTUS_HEALTH_PATH
+              value: "/server/ping"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_KEYS
               value: "cms-site-internal,cms-site-external,internal/cms-site-internal,external/cms-site-external,graphql-api,internal/graphql-api,external/graphql-api,<path:secret/data/keycloak-client-id-graphql-api#value>,internal/<path:secret/data/keycloak-client-id-graphql-api#value>,external/<path:secret/data/keycloak-client-id-graphql-api#value>"
             - name: BROWSER_PUSH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_PREFIX
