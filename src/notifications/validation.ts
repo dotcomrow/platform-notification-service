@@ -160,7 +160,8 @@ const browserPushSubscriptionLifecyclePatchSchema = z.object({
 const browserPushSubscriptionDeleteSchema = z.object({
   browser_subscription_id: z.string().trim().min(1),
   browser_installation_id: z.string().trim().min(1),
-  browser_subscription_client_secret: z.string().trim().min(32).max(512)
+  browser_subscription_client_secret: z.string().trim().min(32).max(512),
+  routine_notifications_enabled: z.boolean().default(false)
 });
 
 const browserPushSubscriptionPreferenceSchema = z.object({

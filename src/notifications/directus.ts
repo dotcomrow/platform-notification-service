@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { DirectusItemResponse, DirectusListResponse, directusJson, queryString } from "../lib/directus.js";
 import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "../lib/json.js";
 import { requestEmailValidation } from "./email-validation.js";
+import { setCrmCommunicationPreference } from "./communication-preferences.js";
 import {
   NotificationContext,
   NotificationChannel,
@@ -667,11 +668,10 @@ function browserSubscriptionRecipient(
 async function listActiveBrowserSubscriptionsForFilter(
   field: "user_id" | "user_email",
   value: string,
-  input: NotificationRequestInput,
   limit = 500
 ): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,routine_notifications_enabled,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set(`filter[${field}][${field === "user_email" ? "_icontains" : "_eq"}]`, value);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
@@ -688,12 +688,19 @@ async function listActiveBrowserSubscriptionsForFilter(
 async function resolveBrowserPushRecipient(
   input: NotificationRequestInput,
   recipient: NotificationRecipientHint
-): Promise<NotificationRecipientHint> {
+): Promise<NotificationRecipientHint | null> {
   if (!recipientWantsBrowserPush(input, recipient)) {
     return recipient;
   }
   if (recipient.type === "browser_subscription") {
-    return { ...recipient, channels: ["browser_push"] };
+    const subscriptionId = asString(recipient.id) || asString(recipient.data?.browser_subscription_id);
+    if (!subscriptionId) return null;
+    const subscription = await findBrowserSubscriptionById(subscriptionId);
+    if (!subscription?.id || subscription.status !== "active") return null;
+    if (input.priority !== "high" && input.priority !== "urgent" && subscription.routine_notifications_enabled === false) {
+      return null;
+    }
+    return browserSubscriptionRecipient(input, recipient, subscription);
   }
   if (recipient.type !== "user" && recipient.type !== "email") {
     return recipient;
@@ -701,16 +708,23 @@ async function resolveBrowserPushRecipient(
 
   const userId = recipientUserId(recipient);
   const email = recipientEmail(recipient);
-  let candidates: BrowserPushSubscriptionRecord[] = [];
+  const important = input.priority === "high" || input.priority === "urgent";
+  let allCandidates: BrowserPushSubscriptionRecord[] = [];
   if (email) {
-    candidates = await listActiveBrowserSubscriptionsForFilter("user_email", email, input);
+    allCandidates = await listActiveBrowserSubscriptionsForFilter("user_email", email);
   }
-  if (candidates.length === 0 && userId) {
-    candidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId, input);
+  if (allCandidates.length === 0 && userId) {
+    allCandidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId);
   }
+  const candidates = important
+    ? allCandidates
+    : allCandidates.filter((candidate) => candidate.routine_notifications_enabled !== false);
 
   const subscription = preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
   if (!subscription?.id) {
+    if (!important && allCandidates.some((candidate) => candidate.routine_notifications_enabled === false)) {
+      return null;
+    }
     const target = userId || email || recipient.id || recipient.address || recipient.type;
     throw Object.assign(new Error(`No active browser push subscription was found for notification recipient ${target}.`), { status: 404 });
   }
@@ -725,6 +739,9 @@ async function resolveBrowserPushRecipients(input: NotificationRequestInput): Pr
   for (const recipient of input.recipients) {
     const channels = recipientChannels(input, recipient) as NotificationChannel[];
     const resolved = await resolveBrowserPushRecipient(input, recipient);
+    if (!resolved) {
+      continue;
+    }
     recipients.push(resolved);
     const nonBrowserChannels = channels.filter((channel) => channel !== "browser_push");
     if (resolved.type === "browser_subscription" && nonBrowserChannels.length > 0) {
@@ -865,6 +882,7 @@ export async function getBrowserPushSubscription(id: string): Promise<BrowserPus
     "auth",
     "user_id",
     "user_email",
+    "routine_notifications_enabled",
     "user_phone",
     "organization_id",
     "app_id",
@@ -1225,6 +1243,7 @@ const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
   "email_validation_checked_at",
   "email_validation_error",
   "is_preferred",
+  "routine_notifications_enabled",
   "organization_id",
   "app_id",
   "permission",
@@ -1510,6 +1529,7 @@ function browserSubscriptionSearchResult(record: BrowserPushSubscriptionRecord):
     user_id: record.user_id || null,
     user_email: record.user_email || null,
     is_preferred: record.is_preferred === true,
+    routine_notifications_enabled: record.routine_notifications_enabled !== false,
     display_name: browserSubscriptionDisplayName(record) || null,
     user_agent: record.user_agent || null,
     source: record.source || null,
@@ -1530,7 +1550,7 @@ export async function searchBrowserPushSubscriptions(
   const field = asString(input.field, "all");
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 25)));
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,routine_notifications_enabled,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", asString(input.status, "active"));
   params.set("filter[organization_id][_eq]", input.organization_id);
   params.set("filter[app_id][_eq]", input.app_id);
@@ -1561,6 +1581,7 @@ const BROWSER_SUBSCRIPTION_BROWSE_FIELDS = [
   "user_id",
   "user_email",
   "is_preferred",
+  "routine_notifications_enabled",
   "organization_id",
   "app_id",
   "permission",
@@ -2283,10 +2304,12 @@ export async function applyEmailValidationEvent(event: JsonRecord): Promise<numb
   return Math.max(updated, updatedTargetIds.size);
 }
 
-export async function deleteBrowserPushSubscription(input: BrowserPushSubscriptionDeleteInput): Promise<boolean> {
+export async function updateBrowserPushSubscriptionCommunicationPreference(
+  input: BrowserPushSubscriptionDeleteInput
+): Promise<BrowserPushSubscriptionRecord> {
   const existing = await findBrowserSubscriptionById(input.browser_subscription_id);
   if (!existing?.id) {
-    return false;
+    throw Object.assign(new Error("Browser subscription was not found."), { status: 404 });
   }
   const recordInstallationId = asString(existing.browser_installation_id);
   if (!recordInstallationId || recordInstallationId !== input.browser_installation_id) {
@@ -2295,11 +2318,42 @@ export async function deleteBrowserPushSubscription(input: BrowserPushSubscripti
   if (!browserSubscriptionProofMatches(existing, input.browser_subscription_client_secret)) {
     throw Object.assign(new Error("Browser subscription ownership proof is required."), { status: 403 });
   }
-  await directusJson<unknown>(
-    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(existing.id)}`,
-    { method: "DELETE" }
-  );
-  return true;
+  const enabled = input.routine_notifications_enabled === true;
+  const email = normalizedIdentityPart(existing.user_email);
+  if (enabled && email && existing.email_validation_status !== "validated") {
+    throw Object.assign(new Error("The email address must be validated before routine communications can be enabled."), { status: 409 });
+  }
+  if (email) {
+    await setCrmCommunicationPreference({
+      email,
+      communicationsOptOut: !enabled,
+      subscriptionId: existing.id
+    });
+  }
+  let targets = [existing];
+  if (!enabled && email) {
+    const params = new URLSearchParams();
+    params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+    params.set("filter[user_email][_icontains]", email);
+    params.set("limit", "500");
+    addDirectusReadCacheBust(params);
+    const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+      `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+    );
+    targets = (response.data ?? []).filter((candidate) => normalizedIdentityPart(candidate.user_email) === email);
+    if (!targets.some((candidate) => candidate.id === existing.id)) targets.push(existing);
+  }
+  const now = new Date().toISOString();
+  let patched: BrowserPushSubscriptionRecord | null = null;
+  for (const target of targets) {
+    const updated = await patchBrowserSubscription(target.id, {
+      routine_notifications_enabled: enabled,
+      date_updated: now
+    });
+    if (target.id === existing.id) patched = updated;
+  }
+  if (!patched?.id) throw new Error("Directus did not return the updated browser subscription preference.");
+  return patched;
 }
 
 export async function resolveBrowserPushSubscriptionOwnership(

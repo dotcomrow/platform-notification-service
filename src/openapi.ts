@@ -230,7 +230,8 @@ export const openApiSpec = {
         properties: {
           browser_subscription_id: { type: "string" },
           browser_installation_id: { type: "string" },
-          browser_subscription_client_secret: { type: "string", minLength: 32, maxLength: 512 }
+          browser_subscription_client_secret: { type: "string", minLength: 32, maxLength: 512 },
+          routine_notifications_enabled: { type: "boolean", default: false }
         }
       },
       BrowserPushSubscriptionPreferenceRequest: {
@@ -426,6 +427,7 @@ export const openApiSpec = {
           browser_subscription_id: { type: "string", nullable: true },
           status: { type: "string" },
           permission: { type: "string" },
+          routine_notifications_enabled: { type: "boolean" },
           fallback_channels: { type: "array", items: { type: "string" } },
           email_validation_id: { type: "string", format: "uuid", nullable: true },
           email_validation_status: { type: "string", enum: ["pending", "validated", "failed", "expired"], nullable: true },
@@ -605,7 +607,7 @@ export const openApiSpec = {
     "/internal/browser-subscriptions/delete": {
       post: {
         operationId: "deleteBrowserSubscription",
-        summary: "Delete a browser Web Push subscription after validating browser ownership.",
+        summary: "Update routine communication preferences after validating browser ownership without deleting the subscription.",
         requestBody: {
           required: true,
           content: {
@@ -616,16 +618,18 @@ export const openApiSpec = {
         },
         responses: {
           "200": {
-            description: "Browser push subscription was deleted or was already absent.",
+            description: "Routine browser and CRM communication preferences were updated; the subscription was retained.",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["ok", "deleted", "browser_subscription_id"],
+                  required: ["ok", "deleted", "browser_subscription_id", "routine_notifications_enabled", "communications_opt_out"],
                   properties: {
                     ok: { type: "boolean" },
                     deleted: { type: "boolean" },
-                    browser_subscription_id: { type: "string" }
+                    browser_subscription_id: { type: "string" },
+                    routine_notifications_enabled: { type: "boolean" },
+                    communications_opt_out: { type: "boolean" }
                   }
                 }
               }

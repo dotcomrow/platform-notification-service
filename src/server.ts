@@ -14,7 +14,7 @@ import { openApiSpec } from "./openapi.js";
 import {
   cleanupBrowserPushSubscriptions,
   applyEmailValidationEvent,
-  deleteBrowserPushSubscription,
+  updateBrowserPushSubscriptionCommunicationPreference,
   createDeliveryAttempt,
   createNotificationRequest,
   browseBrowserPushSubscriptions,
@@ -686,6 +686,7 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
       browser_subscription_id: subscription.id || null,
       status: subscription.status,
       permission: subscription.permission || input.permission,
+      routine_notifications_enabled: subscription.routine_notifications_enabled !== false,
       fallback_channels: subscription.fallback_channels_json || input.fallback_channels,
       email_validation_id: subscription.email_validation_id || null,
       email_validation_status: subscription.email_validation_status || null,
@@ -707,11 +708,13 @@ app.post("/internal/browser-subscriptions/delete", async (req, res, next) => {
   try {
     await enforceInternalAuth(req);
     const input = parseBrowserSubscriptionDelete(req.body);
-    const deleted = await deleteBrowserPushSubscription(input);
+    const subscription = await updateBrowserPushSubscriptionCommunicationPreference(input);
     res.status(200).json({
       ok: true,
-      deleted,
-      browser_subscription_id: input.browser_subscription_id
+      deleted: false,
+      browser_subscription_id: input.browser_subscription_id,
+      routine_notifications_enabled: subscription.routine_notifications_enabled !== false,
+      communications_opt_out: subscription.routine_notifications_enabled === false
     });
   } catch (error) {
     next(error);
@@ -729,6 +732,7 @@ app.post("/internal/browser-subscriptions/resolve", async (req, res, next) => {
       browser_installation_id: subscription.browser_installation_id,
       status: subscription.status,
       permission: subscription.permission,
+      routine_notifications_enabled: subscription.routine_notifications_enabled !== false,
       user_email: subscription.user_email || null,
       email_validation_id: subscription.email_validation_id || null,
       email_validation_status: subscription.email_validation_status || null,

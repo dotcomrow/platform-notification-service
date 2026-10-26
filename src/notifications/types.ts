@@ -219,6 +219,7 @@ export type BrowserPushSubscriptionDeleteInput = {
   browser_subscription_id: string;
   browser_installation_id: string;
   browser_subscription_client_secret: string;
+  routine_notifications_enabled?: boolean;
 };
 
 export type BrowserPushSubscriptionPreferenceInput = {
@@ -248,6 +249,7 @@ export type BrowserPushSubscriptionSearchResult = {
   email_validation_checked_at?: string | null;
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
+  routine_notifications_enabled?: boolean | null;
   display_name?: string | null;
   user_agent?: string | null;
   source?: string | null;
@@ -364,6 +366,7 @@ export type BrowserPushSubscriptionRecord = {
   email_validation_checked_at?: string | null;
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
+  routine_notifications_enabled?: boolean | null;
   user_phone?: string | null;
   organization_id?: string | PlatformOrganization | null;
   app_id?: string | PlatformApp | null;
