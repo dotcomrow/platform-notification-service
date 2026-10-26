@@ -22,6 +22,7 @@ function normalizeStatus(value: unknown): EmailValidationStatus {
 
 export async function requestEmailValidation(input: {
   subscriptionId: string;
+  subjectId?: string | null;
   email: string;
   attemptKey?: string | null;
 }): Promise<EmailValidationResult> {
@@ -35,6 +36,7 @@ export async function requestEmailValidation(input: {
     },
     body: {
       purpose: config.crmEmailValidationPurpose,
+      subject_id: input.subjectId || `email:${normalizedEmail}`,
       properties: {
         email: normalizedEmail,
         firstname: "Notification",

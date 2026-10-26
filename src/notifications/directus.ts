@@ -2095,6 +2095,7 @@ async function synchronizeBrowserSubscriptionEmailValidation(
   try {
     const validation = await requestEmailValidation({
       subscriptionId: record.id,
+      subjectId: record.user_id ? `directus-user:${record.user_id}` : `email:${email}`,
       email,
       attemptKey: retryTerminalValidation
         ? sha256(`${record.email_validation_id || "terminal"}:${record.email_validation_checked_at || "unchecked"}`).slice(0, 20)
