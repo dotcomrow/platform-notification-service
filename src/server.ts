@@ -7,7 +7,7 @@ import { ZodError } from "zod";
 import { config } from "./config.js";
 import { enforceInternalAuth } from "./auth/internal-auth.js";
 import { directusHealth } from "./lib/directus.js";
-import { kafkaConsumerReady, kafkaReady, publishJson, runJsonConsumer } from "./lib/kafka.js";
+import { kafkaConsumerReady, kafkaReady, publishJsonBatch, runJsonConsumer } from "./lib/kafka.js";
 import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate } from "./lib/json.js";
 import { vaultValue } from "./lib/vault.js";
 import { openApiSpec } from "./openapi.js";
@@ -227,7 +227,20 @@ async function queueNotificationInput(parsedInput: NotificationRequestInput): Pr
   };
 
   try {
-    await publishJson(config.notificationRequestedTopic, requestRecord.id, eventPayload);
+    const recipientCount = input.recipients.length;
+    const deliveryEventPayloads = recipientCount > 0
+      ? input.recipients.map((recipient, index) => ({
+          ...eventPayload,
+          channels: recipient.channels?.length ? recipient.channels : input.channels,
+          recipients: [recipient],
+          delivery_recipient_index: index,
+          delivery_recipient_count: recipientCount
+        }))
+      : [eventPayload];
+    await publishJsonBatch(
+      config.notificationRequestedTopic,
+      deliveryEventPayloads.map((payload) => ({ key: requestRecord.id, payload }))
+    );
     await markRequestQueued(requestRecord.id);
   } catch (error) {
     await markRequestQueueFailed(requestRecord.id, error);

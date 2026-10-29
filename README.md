@@ -71,6 +71,11 @@ Browser subscription browse/stat tools are exposed through OpenAPI for GraphQL
 action generation as `browseBrowserSubscriptions` and
 `getBrowserSubscriptionStats`.
 
+Browser-push user/email recipients may set
+`data.browser_push_device_target` to `current_device`, `favorite_device`, or
+`all_devices`. The default is `current_device`. `all_devices` resolves every
+active, eligible subscription and publishes one delivery event per device.
+
 Example stats request:
 
 ```json

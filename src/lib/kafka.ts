@@ -128,19 +128,24 @@ async function producer(): Promise<Producer> {
 }
 
 export async function publishJson(topic: string, key: string, payload: JsonRecord): Promise<void> {
+  await publishJsonBatch(topic, [{ key, payload }]);
+}
+
+export async function publishJsonBatch(
+  topic: string,
+  entries: Array<{ key: string; payload: JsonRecord }>
+): Promise<void> {
   const activeProducer = await producer();
   await activeProducer.send({
     topic,
-    messages: [
-      {
-        key,
-        value: JSON.stringify(payload),
-        headers: {
-          "content-type": "application/json",
-          "schema-version": "1"
-        }
+    messages: entries.map(({ key, payload }) => ({
+      key,
+      value: JSON.stringify(payload),
+      headers: {
+        "content-type": "application/json",
+        "schema-version": "1"
       }
-    ]
+    }))
   });
 }
 

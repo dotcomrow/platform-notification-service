@@ -582,6 +582,21 @@ function recipientEmail(recipient: NotificationRecipientHint): string {
   return asString(recipient.address) || asString(recipient.data?.email) || asString(recipient.data?.user_email);
 }
 
+type BrowserPushDeviceTarget = "current_device" | "favorite_device" | "all_devices";
+
+function browserPushDeviceTarget(
+  input: NotificationRequestInput,
+  recipient: NotificationRecipientHint
+): BrowserPushDeviceTarget | null {
+  const notificationPreferences = asRecord(input.metadata.notification_preferences);
+  const value = asString(recipient.data?.browser_push_device_target)
+    || asString(notificationPreferences?.browser_push_device_target);
+  if (value === "current_device" || value === "favorite_device" || value === "all_devices") {
+    return value;
+  }
+  return null;
+}
+
 async function hasValidatedEmailSubscription(email: string): Promise<boolean> {
   const normalizedEmail = normalizedIdentityPart(email);
   if (!normalizedEmail) {
@@ -688,22 +703,22 @@ async function listActiveBrowserSubscriptionsForFilter(
 async function resolveBrowserPushRecipient(
   input: NotificationRequestInput,
   recipient: NotificationRecipientHint
-): Promise<NotificationRecipientHint | null> {
+): Promise<NotificationRecipientHint[]> {
   if (!recipientWantsBrowserPush(input, recipient)) {
-    return recipient;
+    return [recipient];
   }
   if (recipient.type === "browser_subscription") {
     const subscriptionId = asString(recipient.id) || asString(recipient.data?.browser_subscription_id);
-    if (!subscriptionId) return null;
+    if (!subscriptionId) return [];
     const subscription = await findBrowserSubscriptionById(subscriptionId);
-    if (!subscription?.id || subscription.status !== "active") return null;
+    if (!subscription?.id || subscription.status !== "active") return [];
     if (input.priority !== "high" && input.priority !== "urgent" && subscription.routine_notifications_enabled === false) {
-      return null;
+      return [];
     }
-    return browserSubscriptionRecipient(input, recipient, subscription);
+    return [browserSubscriptionRecipient(input, recipient, subscription)];
   }
   if (recipient.type !== "user" && recipient.type !== "email") {
-    return recipient;
+    return [recipient];
   }
 
   const userId = recipientUserId(recipient);
@@ -720,15 +735,23 @@ async function resolveBrowserPushRecipient(
     ? allCandidates
     : allCandidates.filter((candidate) => candidate.routine_notifications_enabled !== false);
 
-  const subscription = preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
+  const deviceTarget = browserPushDeviceTarget(input, recipient);
+  if (deviceTarget === "all_devices" && candidates.length > 0) {
+    return candidates.map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
+  }
+  const subscription = deviceTarget === "current_device"
+    ? candidates.find((candidate) => asString(candidate.browser_installation_id) === input.browser_installation_id) ?? null
+    : deviceTarget === "favorite_device"
+      ? candidates.find((candidate) => candidate.is_preferred === true) ?? null
+      : preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
   if (!subscription?.id) {
     if (!important && allCandidates.some((candidate) => candidate.routine_notifications_enabled === false)) {
-      return null;
+      return [];
     }
     const target = userId || email || recipient.id || recipient.address || recipient.type;
     throw Object.assign(new Error(`No active browser push subscription was found for notification recipient ${target}.`), { status: 404 });
   }
-  return browserSubscriptionRecipient(input, recipient, subscription);
+  return [browserSubscriptionRecipient(input, recipient, subscription)];
 }
 
 async function resolveBrowserPushRecipients(input: NotificationRequestInput): Promise<NotificationRequestInput> {
@@ -739,20 +762,22 @@ async function resolveBrowserPushRecipients(input: NotificationRequestInput): Pr
   for (const recipient of input.recipients) {
     const channels = recipientChannels(input, recipient) as NotificationChannel[];
     const resolved = await resolveBrowserPushRecipient(input, recipient);
-    if (!resolved) {
+    if (resolved.length === 0) {
       continue;
     }
-    recipients.push(resolved);
+    recipients.push(...resolved);
     const nonBrowserChannels = channels.filter((channel) => channel !== "browser_push");
-    if (resolved.type === "browser_subscription" && nonBrowserChannels.length > 0) {
+    const resolvedBrowserSubscriptions = resolved.filter((entry) => entry.type === "browser_subscription");
+    if (resolvedBrowserSubscriptions.length > 0 && nonBrowserChannels.length > 0) {
       recipients.push({
         ...recipient,
         channels: nonBrowserChannels,
         data: {
           ...(recipient.data ?? {}),
           email_validation_required: nonBrowserChannels.includes("email"),
-          browser_subscription_id: resolved.id,
-          resolved_browser_installation_id: resolved.data?.browser_installation_id
+          browser_subscription_id: resolvedBrowserSubscriptions[0].id,
+          browser_subscription_ids: resolvedBrowserSubscriptions.map((entry) => entry.id).filter(Boolean),
+          resolved_browser_installation_id: resolvedBrowserSubscriptions[0].data?.browser_installation_id
         }
       });
     }
