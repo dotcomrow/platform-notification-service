@@ -69,6 +69,7 @@ spec:
               SECRET_PATH="secret/data/platform-notification-service"
               DEPLOY_SERVICE_CLIENT_PATH="secret/data/platform-notification-service/clients/platform-deploy-service"
               RUNTIME_STATUS_CLIENT_PATH="secret/data/platform-notification-service/clients/runtime-status-service"
+              PLATFORM_OPERATION_WORKER_CLIENT_PATH="secret/data/platform-notification-service/clients/graphql-platform-operation-worker"
               GRAPHQL_API_CLIENT_ID_PATH="secret/data/keycloak-client-id-graphql-api"
 
               graphql_client_code="$(curl -sS -o /tmp/graphql-api-client-id.json -w '%{http_code}' \
@@ -267,6 +268,33 @@ spec:
                 fi
               fi
 
+              operation_worker_client_code="$(curl -sS -o /tmp/platform-operation-worker-client-secret.json -w '%{http_code}' \
+                -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                "${VAULT_ADDR}/v1/${PLATFORM_OPERATION_WORKER_CLIENT_PATH}" || true)"
+              if [ "${operation_worker_client_code}" = "200" ]; then
+                operation_worker_client_token="$(jq -r '.data.data.token // empty' /tmp/platform-operation-worker-client-secret.json)"
+                existing_operation_worker_client_data="$(jq -c '.data.data // {}' /tmp/platform-operation-worker-client-secret.json)"
+              else
+                operation_worker_client_token=""
+                existing_operation_worker_client_data="{}"
+              fi
+
+              if [ -z "${operation_worker_client_token}" ] || [ "${operation_worker_client_token}" = "null" ]; then
+                operation_worker_client_token="$(openssl rand -base64 48 | tr -d '\n' | tr '/+' '._')"
+                operation_worker_client_payload="$(jq -nc --arg token "${operation_worker_client_token}" --argjson existing "${existing_operation_worker_client_data}" '{data:($existing + {token:$token})}')"
+                operation_worker_client_write_code="$(curl -sS -o /tmp/platform-operation-worker-client-secret-write.json -w '%{http_code}' \
+                  -X POST \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "${operation_worker_client_payload}" \
+                  "${VAULT_ADDR}/v1/${PLATFORM_OPERATION_WORKER_CLIENT_PATH}" || true)"
+                if [ "${operation_worker_client_write_code}" != "200" ] && [ "${operation_worker_client_write_code}" != "204" ]; then
+                  echo "Failed to write ${PLATFORM_OPERATION_WORKER_CLIENT_PATH} to Vault (HTTP ${operation_worker_client_write_code})."
+                  cat /tmp/platform-operation-worker-client-secret-write.json || true
+                  exit 1
+                fi
+              fi
+
               echo "Platform notification service Vault configuration is ready."
 ---
 apiVersion: v1
@@ -416,7 +444,7 @@ spec:
             - name: BROWSER_SUBSCRIPTION_SEARCH_TRUSTED_DIRECTUS_CLIENT_TOKEN_VAULT_KEY
               value: "token"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_KEYS
-              value: "platform-deploy-service,runtime-status-service,suncoast-crm-api"
+              value: "platform-deploy-service,runtime-status-service,suncoast-crm-api,graphql-platform-operation-worker"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_PREFIX
               value: "secret/data/platform-notification-service/clients"
             - name: NOTIFICATION_INTAKE_TRUSTED_CLIENT_TOKEN_VAULT_KEY
