@@ -24,6 +24,8 @@ import {
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionPreferenceInput,
+  BrowserPushSubscriptionRoutingInput,
+  BrowserPushSubscriptionRoutingResult,
   BrowserPushSubscriptionRecord,
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionSearchResult,
@@ -686,7 +688,7 @@ async function listActiveBrowserSubscriptionsForFilter(
   limit = 500
 ): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,routine_notifications_enabled,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,is_notification_target,routine_notifications_enabled,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set(`filter[${field}][${field === "user_email" ? "_icontains" : "_eq"}]`, value);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
@@ -734,6 +736,14 @@ async function resolveBrowserPushRecipient(
   const candidates = important
     ? allCandidates
     : allCandidates.filter((candidate) => candidate.routine_notifications_enabled !== false);
+
+  const configuredTargets = allCandidates.filter((candidate) => candidate.is_notification_target === true);
+  if (configuredTargets.length > 0) {
+    const eligibleTargetIds = new Set(candidates.map((candidate) => candidate.id));
+    return configuredTargets
+      .filter((candidate) => eligibleTargetIds.has(candidate.id))
+      .map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
+  }
 
   const deviceTarget = browserPushDeviceTarget(input, recipient);
   if (deviceTarget === "all_devices" && candidates.length > 0) {
@@ -1268,6 +1278,7 @@ const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
   "email_validation_checked_at",
   "email_validation_error",
   "is_preferred",
+  "is_notification_target",
   "routine_notifications_enabled",
   "organization_id",
   "app_id",
@@ -1554,6 +1565,7 @@ function browserSubscriptionSearchResult(record: BrowserPushSubscriptionRecord):
     user_id: record.user_id || null,
     user_email: record.user_email || null,
     is_preferred: record.is_preferred === true,
+    is_notification_target: record.is_notification_target === true,
     routine_notifications_enabled: record.routine_notifications_enabled !== false,
     display_name: browserSubscriptionDisplayName(record) || null,
     user_agent: record.user_agent || null,
@@ -1575,7 +1587,7 @@ export async function searchBrowserPushSubscriptions(
   const field = asString(input.field, "all");
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 25)));
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,routine_notifications_enabled,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,is_notification_target,routine_notifications_enabled,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", asString(input.status, "active"));
   params.set("filter[organization_id][_eq]", input.organization_id);
   params.set("filter[app_id][_eq]", input.app_id);
@@ -1606,6 +1618,7 @@ const BROWSER_SUBSCRIPTION_BROWSE_FIELDS = [
   "user_id",
   "user_email",
   "is_preferred",
+  "is_notification_target",
   "routine_notifications_enabled",
   "organization_id",
   "app_id",
@@ -2428,13 +2441,94 @@ export async function setPreferredBrowserPushSubscription(
     ? normalizedIdentityPart(record.user_email) === suppliedEmail
     : normalizedIdentityPart(record.user_id) === suppliedUserId
   );
+  const routedToFavorite = matching.filter((record) => record.is_notification_target === true).length === 1
+    && matching.some((record) => record.is_preferred === true && record.is_notification_target === true);
   for (const record of matching) {
     if (record.id && record.id !== selected.id && record.is_preferred === true) {
       await patchBrowserSubscription(record.id, { is_preferred: false });
     }
+    if (routedToFavorite && record.id !== selected.id && record.is_notification_target === true) {
+      await patchBrowserSubscription(record.id, { is_notification_target: false });
+    }
   }
-  const patched = await patchBrowserSubscription(selected.id, { is_preferred: true });
+  const patched = await patchBrowserSubscription(selected.id, {
+    is_preferred: true,
+    ...(routedToFavorite ? { is_notification_target: true } : {})
+  });
   return patched ?? { ...selected, is_preferred: true };
+}
+
+export async function setBrowserPushSubscriptionRouting(
+  input: BrowserPushSubscriptionRoutingInput
+): Promise<BrowserPushSubscriptionRoutingResult> {
+  const suppliedUserId = normalizedIdentityPart(input.user_id);
+  const suppliedEmail = normalizedIdentityPart(input.user_email);
+  const identityField = suppliedEmail ? "user_email" : "user_id";
+  const identityValue = suppliedEmail || suppliedUserId;
+  if (!identityValue) {
+    throw Object.assign(new Error("user_id or user_email is required."), { status: 400 });
+  }
+
+  const params = new URLSearchParams();
+  params.set("fields", BROWSER_SUBSCRIPTION_LOOKUP_FIELDS);
+  params.set(`filter[${identityField}][${suppliedEmail ? "_icontains" : "_eq"}]`, identityValue);
+  params.set("sort", "-last_seen_at,-date_updated,-date_created");
+  params.set("limit", "500");
+  addDirectusReadCacheBust(params);
+  const response = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  const matching = (response.data ?? []).filter((record) => suppliedEmail
+    ? normalizedIdentityPart(record.user_email) === suppliedEmail
+    : normalizedIdentityPart(record.user_id) === suppliedUserId
+  );
+  const eligible = matching.filter((record) =>
+    record.status === "active" &&
+    record.permission === "granted" &&
+    Boolean(record.endpoint_hash)
+  );
+  if (eligible.length === 0) {
+    throw Object.assign(new Error("No active browser notification devices were found for this user."), { status: 404 });
+  }
+
+  let selected: BrowserPushSubscriptionRecord[];
+  if (input.browser_push_device_target === "all_devices") {
+    selected = eligible;
+  } else if (input.browser_push_device_target === "favorite_device") {
+    const favorite = eligible.find((record) => record.is_preferred === true);
+    if (!favorite) {
+      throw Object.assign(new Error("Choose a favorite browser notification device first."), { status: 409 });
+    }
+    selected = [favorite];
+  } else {
+    const current = eligible.find((record) =>
+      (input.browser_subscription_id && record.id === input.browser_subscription_id) ||
+      (input.browser_installation_id && record.browser_installation_id === input.browser_installation_id)
+    );
+    if (!current) {
+      throw Object.assign(new Error("The current browser notification device was not found for this user."), { status: 409 });
+    }
+    selected = [current];
+  }
+
+  const selectedIds = new Set(selected.map((record) => record.id));
+  const now = new Date().toISOString();
+  for (const record of matching) {
+    const shouldTarget = selectedIds.has(record.id);
+    if (record.is_notification_target !== shouldTarget) {
+      await patchBrowserSubscription(record.id, {
+        is_notification_target: shouldTarget,
+        date_updated: now
+      });
+    }
+  }
+
+  return {
+    browser_push_device_target: input.browser_push_device_target,
+    eligible_device_count: eligible.length,
+    selected_device_count: selected.length,
+    selected_browser_subscription_ids: selected.map((record) => record.id)
+  };
 }
 
 async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {

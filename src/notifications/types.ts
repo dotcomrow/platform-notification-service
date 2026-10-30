@@ -228,6 +228,21 @@ export type BrowserPushSubscriptionPreferenceInput = {
   user_email?: string;
 };
 
+export type BrowserPushSubscriptionRoutingInput = {
+  browser_push_device_target: "current_device" | "favorite_device" | "all_devices";
+  browser_subscription_id?: string;
+  browser_installation_id?: string;
+  user_id?: string;
+  user_email?: string;
+};
+
+export type BrowserPushSubscriptionRoutingResult = {
+  browser_push_device_target: BrowserPushSubscriptionRoutingInput["browser_push_device_target"];
+  eligible_device_count: number;
+  selected_device_count: number;
+  selected_browser_subscription_ids: string[];
+};
+
 export type BrowserPushSubscriptionSearchField = "all" | "id" | "user_id" | "email" | "name";
 
 export type BrowserPushSubscriptionSearchInput = {
@@ -249,6 +264,7 @@ export type BrowserPushSubscriptionSearchResult = {
   email_validation_checked_at?: string | null;
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
+  is_notification_target?: boolean | null;
   routine_notifications_enabled?: boolean | null;
   display_name?: string | null;
   user_agent?: string | null;
@@ -366,6 +382,7 @@ export type BrowserPushSubscriptionRecord = {
   email_validation_checked_at?: string | null;
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
+  is_notification_target?: boolean | null;
   routine_notifications_enabled?: boolean | null;
   user_phone?: string | null;
   organization_id?: string | PlatformOrganization | null;

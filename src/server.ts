@@ -34,6 +34,7 @@ import {
   reconcileNotificationRequests,
   resolveBrowserPushSubscriptionOwnership,
   searchBrowserPushSubscriptions,
+  setBrowserPushSubscriptionRouting,
   setPreferredBrowserPushSubscription,
   upsertBrowserPushSubscription
 } from "./notifications/directus.js";
@@ -43,6 +44,7 @@ import {
   parseBrowserSubscriptionBrowse,
   parseBrowserSubscriptionLifecyclePatch,
   parseBrowserSubscriptionPreference,
+  parseBrowserSubscriptionRouting,
   parseBrowserSubscriptionSearch,
   parseBrowserSubscriptionStats,
   parseBrowserSubscription,
@@ -835,6 +837,17 @@ app.post("/internal/browser-subscriptions/preferred", async (req, res, next) => 
       browser_installation_id: subscription.browser_installation_id,
       is_preferred: subscription.is_preferred === true
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/routing", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscriptionRouting(req.body);
+    const result = await setBrowserPushSubscriptionRouting(input);
+    res.status(200).json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }

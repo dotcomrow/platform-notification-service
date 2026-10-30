@@ -244,6 +244,21 @@ export const openApiSpec = {
           user_email: { type: "string", format: "email" }
         }
       },
+      BrowserPushSubscriptionRoutingRequest: {
+        type: "object",
+        required: ["browser_push_device_target"],
+        additionalProperties: false,
+        properties: {
+          browser_push_device_target: {
+            type: "string",
+            enum: ["current_device", "favorite_device", "all_devices"]
+          },
+          browser_subscription_id: { type: "string" },
+          browser_installation_id: { type: "string" },
+          user_id: { type: "string" },
+          user_email: { type: "string", format: "email" }
+        }
+      },
       BrowserPushSubscriptionSearchRequest: {
         type: "object",
         required: ["organization_id", "app_id"],
@@ -275,6 +290,7 @@ export const openApiSpec = {
                 user_id: { type: "string", nullable: true },
                 user_email: { type: "string", nullable: true },
                 is_preferred: { type: "boolean" },
+                is_notification_target: { type: "boolean" },
                 display_name: { type: "string", nullable: true },
                 user_agent: { type: "string", nullable: true },
                 source: { type: "string", nullable: true },
@@ -345,6 +361,8 @@ export const openApiSpec = {
                 browser_installation_id: { type: "string", nullable: true },
                 user_id: { type: "string", nullable: true },
                 user_email: { type: "string", nullable: true },
+                is_preferred: { type: "boolean" },
+                is_notification_target: { type: "boolean" },
                 display_name: { type: "string", nullable: true },
                 organization_id: { type: "string", nullable: true },
                 app_id: { type: "string", nullable: true },
@@ -749,6 +767,30 @@ export const openApiSpec = {
         responses: {
           "200": {
             description: "The preferred browser subscription was updated.",
+            content: {
+              "application/json": {
+                schema: { type: "object", additionalProperties: true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/routing": {
+      post: {
+        operationId: "setBrowserSubscriptionRouting",
+        summary: "Select the browser Web Push device records that should receive notifications for a user.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionRoutingRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "The selected browser notification device records were updated.",
             content: {
               "application/json": {
                 schema: { type: "object", additionalProperties: true }

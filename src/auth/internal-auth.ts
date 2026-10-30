@@ -34,7 +34,8 @@ function allowsBrowserSubscriptionSearchTrustedTokens(req: Request): boolean {
   return req.path === "/internal/browser-subscriptions/search"
     || req.path === "/internal/browser-subscriptions/browse"
     || req.path === "/internal/browser-subscriptions/stats"
-    || req.path === "/internal/browser-subscriptions/preferred";
+    || req.path === "/internal/browser-subscriptions/preferred"
+    || req.path === "/internal/browser-subscriptions/routing";
 }
 
 function allowsNotificationIntakeTrustedTokens(req: Request): boolean {

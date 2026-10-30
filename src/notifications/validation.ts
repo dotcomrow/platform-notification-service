@@ -8,6 +8,7 @@ import {
   BrowserPushSubscriptionInput,
   BrowserPushSubscriptionLifecyclePatchInput,
   BrowserPushSubscriptionPreferenceInput,
+  BrowserPushSubscriptionRoutingInput,
   BrowserPushSubscriptionSearchInput,
   BrowserPushSubscriptionStatsInput,
   NotificationDeliveryAttemptInput,
@@ -172,6 +173,31 @@ const browserPushSubscriptionPreferenceSchema = z.object({
   message: "user_id or user_email is required"
 });
 
+const browserPushSubscriptionRoutingSchema = z.object({
+  browser_push_device_target: z.enum(["current_device", "favorite_device", "all_devices"]),
+  browser_subscription_id: z.string().trim().min(1).optional(),
+  browser_installation_id: z.string().trim().min(1).optional(),
+  user_id: z.string().trim().min(1).optional(),
+  user_email: z.string().trim().email().transform((value) => value.toLowerCase()).optional()
+}).superRefine((value, ctx) => {
+  if (!value.user_id && !value.user_email) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "user_id or user_email is required"
+    });
+  }
+  if (
+    value.browser_push_device_target === "current_device" &&
+    !value.browser_subscription_id &&
+    !value.browser_installation_id
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "browser_subscription_id or browser_installation_id is required for current_device"
+    });
+  }
+});
+
 const browserPushSubscriptionCleanupSchema = z.object({
   stale_days: z.number().int().min(1).max(3650).optional(),
   limit: z.number().int().min(1).max(5000).optional(),
@@ -271,6 +297,10 @@ export function parseBrowserSubscriptionDelete(body: unknown): BrowserPushSubscr
 
 export function parseBrowserSubscriptionPreference(body: unknown): BrowserPushSubscriptionPreferenceInput {
   return browserPushSubscriptionPreferenceSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionPreferenceInput;
+}
+
+export function parseBrowserSubscriptionRouting(body: unknown): BrowserPushSubscriptionRoutingInput {
+  return browserPushSubscriptionRoutingSchema.parse(unwrapInput(body)) as BrowserPushSubscriptionRoutingInput;
 }
 
 export function parseBrowserSubscriptionCleanup(body: unknown): BrowserPushSubscriptionCleanupInput {
