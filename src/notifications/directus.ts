@@ -2705,7 +2705,10 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       ? response.data
       : await findBrowserSubscriptionById(recordId);
     if (!created?.id) {
-      throw new Error("Directus did not return a browser capability record id.");
+      return {
+        id: "",
+        ...payload
+      } as BrowserPushSubscriptionRecord;
     }
     await supersedeOtherBrowserSubscriptions(created);
     return created;
