@@ -20,7 +20,7 @@ const channelSchema = z.enum(["in_app", "browser_push", "mobile_push", "email", 
 const severitySchema = z.enum(["debug", "info", "success", "warning", "error", "critical"]).default("info");
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]).default("normal");
 
-const jsonRecordSchema = z.record(z.unknown()).default({});
+const jsonRecordSchema = z.record(z.string(), z.unknown()).default({});
 
 const recipientHintSchema = z.object({
   type: z.enum(["user", "role", "group", "organization", "app", "browser_subscription", "email", "phone", "topic", "webhook"]),

@@ -925,7 +925,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     ? 422
     : Math.max(400, Math.min(599, Number((err as { status?: number }).status) || 500));
   const message = err instanceof ZodError
-    ? err.errors.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ")
+    ? err.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ")
     : err instanceof Error ? err.message : "Internal server error";
 
   if (status >= 500) {
