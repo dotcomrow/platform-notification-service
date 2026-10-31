@@ -1417,14 +1417,22 @@ async function patchBrowserSubscription(
   id: string,
   payload: Record<string, unknown>
 ): Promise<BrowserPushSubscriptionRecord | null> {
-  const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+  const existing = await findBrowserSubscriptionById(id).catch(() => null);
+  const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord> | null>(
     `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}/${encodeURIComponent(id)}`,
     {
       method: "PATCH",
       body: payload
     }
   );
-  return response.data?.id ? response.data : null;
+  if (response?.data?.id) {
+    return response.data;
+  }
+  return {
+    ...(existing ?? {}),
+    id,
+    ...payload
+  } as BrowserPushSubscriptionRecord;
 }
 
 function browserSubscriptionLifecyclePayload(
