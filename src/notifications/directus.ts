@@ -2681,22 +2681,26 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       return result;
     }
 
-    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+    const recordId = randomUUID();
+    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord> | null>(
       `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}`,
       {
         method: "POST",
         body: {
-          id: randomUUID(),
+          id: recordId,
           ...payload,
           date_created: now
         }
       }
     );
-    if (!response.data?.id) {
+    const created = response?.data?.id
+      ? response.data
+      : await findBrowserSubscriptionById(recordId);
+    if (!created?.id) {
       throw new Error("Directus did not return a browser capability record id.");
     }
-    await supersedeOtherBrowserSubscriptions(response.data);
-    return response.data;
+    await supersedeOtherBrowserSubscriptions(created);
+    return created;
   }
 
   const endpointHash = sha256(subscription.endpoint);
@@ -2746,22 +2750,26 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
   }
 
   try {
-    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord>>(
+    const recordId = randomUUID();
+    const response = await directusJson<DirectusItemResponse<BrowserPushSubscriptionRecord> | null>(
       `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}`,
       {
         method: "POST",
         body: {
-          id: randomUUID(),
+          id: recordId,
           ...payload,
           date_created: now
         }
       }
     );
-    if (!response.data?.id) {
+    const created = response?.data?.id
+      ? response.data
+      : await findBrowserSubscriptionById(recordId);
+    if (!created?.id) {
       throw new Error("Directus did not return a browser push subscription id.");
     }
-    await supersedeOtherBrowserSubscriptions(response.data);
-    return response.data;
+    await supersedeOtherBrowserSubscriptions(created);
+    return created;
   } catch (error) {
     if (isEndpointHashUniqueError(error)) {
       const raced = await findBrowserSubscriptionAfterEndpointConflict(endpointHash, input.browser_installation_id);
