@@ -5,6 +5,13 @@ import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate }
 import { requestEmailValidation } from "./email-validation.js";
 import { setCrmCommunicationPreference } from "./communication-preferences.js";
 import {
+  BrowserPushDeviceTarget,
+  inheritedBrowserPushRoutingPatch,
+  normalizeBrowserPushDeviceTarget,
+  persistedBrowserPushDeviceTarget,
+  selectBrowserPushCandidates,
+} from "./browser-push-routing.js";
+import {
   NotificationContext,
   NotificationChannel,
   NotificationDeliveryAttemptInput,
@@ -584,8 +591,6 @@ function recipientEmail(recipient: NotificationRecipientHint): string {
   return asString(recipient.address) || asString(recipient.data?.email) || asString(recipient.data?.user_email);
 }
 
-type BrowserPushDeviceTarget = "current_device" | "favorite_device" | "all_devices";
-
 function browserPushDeviceTarget(
   input: NotificationRequestInput,
   recipient: NotificationRecipientHint
@@ -593,10 +598,7 @@ function browserPushDeviceTarget(
   const notificationPreferences = asRecord(input.metadata.notification_preferences);
   const value = asString(recipient.data?.browser_push_device_target)
     || asString(notificationPreferences?.browser_push_device_target);
-  if (value === "current_device" || value === "favorite_device" || value === "all_devices") {
-    return value;
-  }
-  return null;
+  return normalizeBrowserPushDeviceTarget(value);
 }
 
 async function hasValidatedEmailSubscription(email: string): Promise<boolean> {
@@ -688,7 +690,7 @@ async function listActiveBrowserSubscriptionsForFilter(
   limit = 500
 ): Promise<BrowserPushSubscriptionRecord[]> {
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,is_notification_target,routine_notifications_enabled,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,endpoint_hash,status,user_id,user_email,is_preferred,is_notification_target,browser_push_device_target,routine_notifications_enabled,organization_id,app_id,permission,fallback_channels_json,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", "active");
   params.set(`filter[${field}][${field === "user_email" ? "_icontains" : "_eq"}]`, value);
   params.set("sort", "-last_seen_at,-date_updated,-date_created");
@@ -733,9 +735,41 @@ async function resolveBrowserPushRecipient(
   if (allCandidates.length === 0 && userId) {
     allCandidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId);
   }
+  const activeEligibleCandidates = allCandidates.filter((candidate) =>
+    candidate.permission === "granted" && Boolean(candidate.endpoint_hash)
+  );
   const candidates = important
-    ? allCandidates
-    : allCandidates.filter((candidate) => candidate.routine_notifications_enabled !== false);
+    ? activeEligibleCandidates
+    : activeEligibleCandidates.filter((candidate) => candidate.routine_notifications_enabled !== false);
+
+  const requestedDeviceTarget = browserPushDeviceTarget(input, recipient);
+  if (requestedDeviceTarget) {
+    const selected = selectBrowserPushCandidates(
+      candidates,
+      requestedDeviceTarget,
+      input.browser_installation_id,
+    );
+    if (requestedDeviceTarget === "all_devices" && selected.length > 0) {
+      return selected.map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
+    }
+    const subscription = selected[0] ?? null;
+    if (subscription?.id) {
+      return [browserSubscriptionRecipient(input, recipient, subscription)];
+    }
+    if (!important && allCandidates.some((candidate) => candidate.routine_notifications_enabled === false)) {
+      return [];
+    }
+    const target = userId || email || recipient.id || recipient.address || recipient.type;
+    throw Object.assign(new Error(`No active browser push subscription was found for notification recipient ${target}.`), { status: 404 });
+  }
+
+  const storedDeviceTarget = persistedBrowserPushDeviceTarget(allCandidates);
+  if (storedDeviceTarget === "all_devices" || storedDeviceTarget === "favorite_device") {
+    const selected = selectBrowserPushCandidates(candidates, storedDeviceTarget);
+    if (selected.length > 0) {
+      return selected.map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
+    }
+  }
 
   const configuredTargets = allCandidates.filter((candidate) => candidate.is_notification_target === true);
   if (configuredTargets.length > 0) {
@@ -745,15 +779,7 @@ async function resolveBrowserPushRecipient(
       .map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
   }
 
-  const deviceTarget = browserPushDeviceTarget(input, recipient);
-  if (deviceTarget === "all_devices" && candidates.length > 0) {
-    return candidates.map((subscription) => browserSubscriptionRecipient(input, recipient, subscription));
-  }
-  const subscription = deviceTarget === "current_device"
-    ? candidates.find((candidate) => asString(candidate.browser_installation_id) === input.browser_installation_id) ?? null
-    : deviceTarget === "favorite_device"
-      ? candidates.find((candidate) => candidate.is_preferred === true) ?? null
-      : preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
+  const subscription = preferredBrowserSubscriptionRecord(candidates, input.browser_installation_id);
   if (!subscription?.id) {
     if (!important && allCandidates.some((candidate) => candidate.routine_notifications_enabled === false)) {
       return [];
@@ -1279,6 +1305,7 @@ const BROWSER_SUBSCRIPTION_LOOKUP_FIELDS = [
   "email_validation_error",
   "is_preferred",
   "is_notification_target",
+  "browser_push_device_target",
   "routine_notifications_enabled",
   "organization_id",
   "app_id",
@@ -1566,6 +1593,7 @@ function browserSubscriptionSearchResult(record: BrowserPushSubscriptionRecord):
     user_email: record.user_email || null,
     is_preferred: record.is_preferred === true,
     is_notification_target: record.is_notification_target === true,
+    browser_push_device_target: normalizeBrowserPushDeviceTarget(record.browser_push_device_target),
     routine_notifications_enabled: record.routine_notifications_enabled !== false,
     display_name: browserSubscriptionDisplayName(record) || null,
     user_agent: record.user_agent || null,
@@ -1587,7 +1615,7 @@ export async function searchBrowserPushSubscriptions(
   const field = asString(input.field, "all");
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 25)));
   const params = new URLSearchParams();
-  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,is_notification_target,routine_notifications_enabled,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
+  params.set("fields", "id,browser_installation_id,status,user_id,user_email,is_preferred,is_notification_target,browser_push_device_target,routine_notifications_enabled,user_agent,source,organization_id,app_id,permission,last_seen_at,date_created,date_updated,capabilities_json,metadata_json");
   params.set("filter[status][_eq]", asString(input.status, "active"));
   params.set("filter[organization_id][_eq]", input.organization_id);
   params.set("filter[app_id][_eq]", input.app_id);
@@ -1619,6 +1647,7 @@ const BROWSER_SUBSCRIPTION_BROWSE_FIELDS = [
   "user_email",
   "is_preferred",
   "is_notification_target",
+  "browser_push_device_target",
   "routine_notifications_enabled",
   "organization_id",
   "app_id",
@@ -2441,8 +2470,12 @@ export async function setPreferredBrowserPushSubscription(
     ? normalizedIdentityPart(record.user_email) === suppliedEmail
     : normalizedIdentityPart(record.user_id) === suppliedUserId
   );
-  const routedToFavorite = matching.filter((record) => record.is_notification_target === true).length === 1
-    && matching.some((record) => record.is_preferred === true && record.is_notification_target === true);
+  const persistedTarget = persistedBrowserPushDeviceTarget(matching);
+  const routedToFavorite = persistedTarget === "favorite_device" || (
+    persistedTarget === null
+    && matching.filter((record) => record.is_notification_target === true).length === 1
+    && matching.some((record) => record.is_preferred === true && record.is_notification_target === true)
+  );
   for (const record of matching) {
     if (record.id && record.id !== selected.id && record.is_preferred === true) {
       await patchBrowserSubscription(record.id, { is_preferred: false });
@@ -2515,12 +2548,35 @@ export async function setBrowserPushSubscriptionRouting(
   const now = new Date().toISOString();
   for (const record of matching) {
     const shouldTarget = selectedIds.has(record.id);
-    if (record.is_notification_target !== shouldTarget) {
+    if (
+      record.is_notification_target !== shouldTarget
+      || normalizeBrowserPushDeviceTarget(record.browser_push_device_target) !== input.browser_push_device_target
+    ) {
       await patchBrowserSubscription(record.id, {
         is_notification_target: shouldTarget,
+        browser_push_device_target: input.browser_push_device_target,
         date_updated: now
       });
     }
+  }
+
+  addDirectusReadCacheBust(params);
+  const verificationResponse = await directusJson<DirectusListResponse<BrowserPushSubscriptionRecord>>(
+    `/items/${encodeURIComponent(config.notificationBrowserSubscriptionCollection)}?${params.toString()}`
+  );
+  const verifiedMatching = (verificationResponse.data ?? []).filter((record) => suppliedEmail
+    ? normalizedIdentityPart(record.user_email) === suppliedEmail
+    : normalizedIdentityPart(record.user_id) === suppliedUserId
+  );
+  const verifiedById = new Map(verifiedMatching.map((record) => [record.id, record]));
+  const failedRecord = matching.find((record) => {
+    const verified = verifiedById.get(record.id);
+    return !verified
+      || verified.is_notification_target !== selectedIds.has(record.id)
+      || normalizeBrowserPushDeviceTarget(verified.browser_push_device_target) !== input.browser_push_device_target;
+  });
+  if (failedRecord) {
+    throw Object.assign(new Error("Browser notification device routing could not be verified after saving."), { status: 502 });
   }
 
   return {
@@ -2529,6 +2585,33 @@ export async function setBrowserPushSubscriptionRouting(
     selected_device_count: selected.length,
     selected_browser_subscription_ids: selected.map((record) => record.id)
   };
+}
+
+async function inheritedBrowserPushDeviceTarget(
+  input: BrowserPushSubscriptionInput,
+  existing: BrowserPushSubscriptionRecord | null,
+): Promise<BrowserPushDeviceTarget | null> {
+  const existingTarget = normalizeBrowserPushDeviceTarget(existing?.browser_push_device_target);
+  if (existingTarget) {
+    return existingTarget;
+  }
+
+  const email = normalizedIdentityPart(input.user_email);
+  const userId = normalizedIdentityPart(input.user_id);
+  const siblings = email
+    ? await listActiveBrowserSubscriptionsForFilter("user_email", email)
+    : userId
+      ? await listActiveBrowserSubscriptionsForFilter("user_id", userId)
+      : [];
+  return persistedBrowserPushDeviceTarget(siblings);
+}
+
+async function browserPushRoutingPayload(
+  input: BrowserPushSubscriptionInput,
+  existing: BrowserPushSubscriptionRecord | null,
+): Promise<Pick<BrowserPushSubscriptionRecord, "browser_push_device_target" | "is_notification_target"> | Record<string, never>> {
+  const target = await inheritedBrowserPushDeviceTarget(input, existing);
+  return inheritedBrowserPushRoutingPatch(target, existing?.is_notification_target === true);
 }
 
 async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscriptionInput): Promise<BrowserPushSubscriptionRecord> {
@@ -2555,6 +2638,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     assertBrowserSubscriptionMatchesInstallation(existingById, input);
     const existing = existingById ?? await findBrowserSubscriptionByInstallationId(input.browser_installation_id);
     assertBrowserSubscriptionCanUpdate(existing, input);
+    const routingPayload = await browserPushRoutingPayload(input, existing);
     const commonPayload = {
       source: input.source,
       browser_installation_id: input.browser_installation_id,
@@ -2562,6 +2646,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
       user_email: input.user_email || null,
       ...browserSubscriptionEmailValidationPayload(existing, input.user_email),
       user_phone: input.user_phone || null,
+      ...routingPayload,
       ...browserSubscriptionRelationPayload(input, existing),
       permission: input.permission,
       capabilities_json: redactJsonRecord(input.capabilities),
@@ -2627,6 +2712,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     : null;
   const existing = byId ?? byEndpoint ??
     (browserSubscriptionProofMatches(byInstallation, input.browser_subscription_client_secret) ? byInstallation : null);
+  const routingPayload = await browserPushRoutingPayload(input, existing);
   const payload = {
     source: input.source,
     browser_installation_id: input.browser_installation_id || null,
@@ -2641,6 +2727,7 @@ async function upsertBrowserPushSubscriptionUnlocked(input: BrowserPushSubscript
     user_email: input.user_email || null,
     ...browserSubscriptionEmailValidationPayload(existing, input.user_email),
     user_phone: input.user_phone || null,
+    ...routingPayload,
     ...browserSubscriptionRelationPayload(input, existing),
     permission: input.permission,
     capabilities_json: redactJsonRecord(input.capabilities),

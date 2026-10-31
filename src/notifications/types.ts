@@ -265,6 +265,7 @@ export type BrowserPushSubscriptionSearchResult = {
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
   is_notification_target?: boolean | null;
+  browser_push_device_target?: BrowserPushSubscriptionRoutingInput["browser_push_device_target"] | null;
   routine_notifications_enabled?: boolean | null;
   display_name?: string | null;
   user_agent?: string | null;
@@ -383,6 +384,7 @@ export type BrowserPushSubscriptionRecord = {
   email_validation_error?: string | null;
   is_preferred?: boolean | null;
   is_notification_target?: boolean | null;
+  browser_push_device_target?: BrowserPushSubscriptionRoutingInput["browser_push_device_target"] | null;
   routine_notifications_enabled?: boolean | null;
   user_phone?: string | null;
   organization_id?: string | PlatformOrganization | null;

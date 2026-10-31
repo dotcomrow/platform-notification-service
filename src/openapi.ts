@@ -291,6 +291,11 @@ export const openApiSpec = {
                 user_email: { type: "string", nullable: true },
                 is_preferred: { type: "boolean" },
                 is_notification_target: { type: "boolean" },
+                browser_push_device_target: {
+                  type: "string",
+                  enum: ["current_device", "favorite_device", "all_devices"],
+                  nullable: true
+                },
                 display_name: { type: "string", nullable: true },
                 user_agent: { type: "string", nullable: true },
                 source: { type: "string", nullable: true },
@@ -363,6 +368,11 @@ export const openApiSpec = {
                 user_email: { type: "string", nullable: true },
                 is_preferred: { type: "boolean" },
                 is_notification_target: { type: "boolean" },
+                browser_push_device_target: {
+                  type: "string",
+                  enum: ["current_device", "favorite_device", "all_devices"],
+                  nullable: true
+                },
                 display_name: { type: "string", nullable: true },
                 organization_id: { type: "string", nullable: true },
                 app_id: { type: "string", nullable: true },
