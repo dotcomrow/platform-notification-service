@@ -21,8 +21,10 @@ function request(presentation) {
 test("accepts a bounded declarative notification presentation", () => {
   const parsed = parseNotificationRequest(request({
     url: "/operations/42",
+    icon_url: "/assets/success-icon.png",
     image_url: "/assets/complete.png",
     image_alt: "Operation complete",
+    tone: "success",
     actions: [
       { id: "open", label: "Open", url: "/operations/42" },
       { id: "history", label: "History", url: "/operations" },
@@ -30,6 +32,12 @@ test("accepts a bounded declarative notification presentation", () => {
   }));
   assert.equal(parsed.presentation.actions.length, 2);
   assert.equal(parsed.presentation.url, "/operations/42");
+  assert.equal(parsed.presentation.icon_url, "/assets/success-icon.png");
+  assert.equal(parsed.presentation.tone, "success");
+});
+
+test("rejects an unsupported notification tone", () => {
+  assert.throws(() => parseNotificationRequest(request({ tone: "catastrophic" })));
 });
 
 test("rejects duplicate or excessive notification actions", () => {

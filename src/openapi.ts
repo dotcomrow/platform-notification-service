@@ -53,8 +53,10 @@ export const openApiSpec = {
             additionalProperties: false,
             properties: {
               url: { type: "string", maxLength: 2048 },
+              icon_url: { type: "string", maxLength: 2048 },
               image_url: { type: "string", maxLength: 2048 },
               image_alt: { type: "string", maxLength: 200 },
+              tone: { type: "string", enum: ["neutral", "info", "success", "warning", "error"] },
               actions: {
                 type: "array",
                 maxItems: 3,

@@ -24,8 +24,10 @@ export type NotificationPresentationAction = {
 
 export type NotificationPresentation = {
   url?: string;
+  icon_url?: string;
   image_url?: string;
   image_alt?: string;
+  tone?: "neutral" | "info" | "success" | "warning" | "error";
   actions?: NotificationPresentationAction[];
 };
 

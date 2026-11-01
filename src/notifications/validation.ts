@@ -29,8 +29,10 @@ const notificationActionSchema = z.object({
 }).strict();
 const notificationPresentationSchema = z.object({
   url: z.string().trim().min(1).max(2048).optional(),
+  icon_url: z.string().trim().min(1).max(2048).optional(),
   image_url: z.string().trim().min(1).max(2048).optional(),
   image_alt: z.string().trim().max(200).optional(),
+  tone: z.enum(["neutral", "info", "success", "warning", "error"]).optional(),
   actions: z.array(notificationActionSchema).max(3).superRefine((actions, ctx) => {
     const seen = new Set<string>();
     actions.forEach((action, index) => {

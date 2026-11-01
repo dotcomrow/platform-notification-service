@@ -429,6 +429,14 @@ function deliveryDryRunRequested(input: NotificationRequestInput): boolean {
     || asBoolean(runtimeCanary?.dryRun);
 }
 
+function notificationTone(input: NotificationRequestInput): "neutral" | "info" | "success" | "warning" | "error" {
+  if (input.presentation?.tone) return input.presentation.tone;
+  if (input.severity === "critical" || input.severity === "error") return "error";
+  if (input.severity === "warning") return "warning";
+  if (input.severity === "success") return "success";
+  return "info";
+}
+
 function buildNotificationTemplateParameters(
   input: NotificationRequestInput,
   context: NotificationContext
@@ -472,7 +480,9 @@ function fallbackRenderedMessage(
     text: body,
     data: input.presentation?.url ? { url: input.presentation.url } : {},
     options: {
+      tone: notificationTone(input),
       ...(input.presentation?.url ? { url: input.presentation.url } : {}),
+      ...(input.presentation?.icon_url ? { icon: input.presentation.icon_url } : {}),
       ...(input.presentation?.image_url ? { image: input.presentation.image_url } : {}),
       ...(input.presentation?.image_alt ? { imageAlt: input.presentation.image_alt } : {}),
       ...(input.presentation?.actions ? {
@@ -522,7 +532,9 @@ async function renderNotificationMessage(
   };
   const options = {
     ...templateOptions,
+    tone: input.presentation?.tone || asString(templateOptions.tone) || notificationTone(input),
     ...(input.presentation?.url ? { url: input.presentation.url } : {}),
+    ...(input.presentation?.icon_url ? { icon: input.presentation.icon_url } : {}),
     ...(input.presentation?.image_url ? { image: input.presentation.image_url } : {}),
     ...(input.presentation?.image_alt ? { imageAlt: input.presentation.image_alt } : {}),
     ...(input.presentation?.actions ? {
