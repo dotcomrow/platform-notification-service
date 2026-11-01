@@ -468,8 +468,21 @@ function fallbackRenderedMessage(
     title: subject,
     body,
     text: body,
-    data: {},
-    options: deliveryDryRunRequested(input) ? { dry_run: true } : {},
+    data: input.presentation?.url ? { url: input.presentation.url } : {},
+    options: {
+      ...(input.presentation?.url ? { url: input.presentation.url } : {}),
+      ...(input.presentation?.image_url ? { image: input.presentation.image_url } : {}),
+      ...(input.presentation?.image_alt ? { imageAlt: input.presentation.image_alt } : {}),
+      ...(input.presentation?.actions ? {
+        actions: input.presentation.actions.map((action) => ({
+          id: action.id,
+          label: action.label,
+          ...(action.url ? { url: action.url } : {}),
+          ...(action.icon_url ? { iconUrl: action.icon_url } : {})
+        }))
+      } : {}),
+      ...(deliveryDryRunRequested(input) ? { dry_run: true } : {})
+    },
     parameters
   };
 }
@@ -499,8 +512,26 @@ async function renderNotificationMessage(
   const body = renderTemplateString(template.body_template, parameters);
   const text = renderTemplateString(template.text_template, parameters) || body;
   const html = renderTemplateString(template.html_template, parameters);
-  const data = asRecord(renderTemplateJson(template.data_template_json ?? {}, parameters)) ?? {};
-  const options = asRecord(renderTemplateJson(template.options_template_json ?? {}, parameters)) ?? {};
+  const templateData = asRecord(renderTemplateJson(template.data_template_json ?? {}, parameters)) ?? {};
+  const templateOptions = asRecord(renderTemplateJson(template.options_template_json ?? {}, parameters)) ?? {};
+  const data = {
+    ...templateData,
+    ...(input.presentation?.url ? { url: input.presentation.url } : {})
+  };
+  const options = {
+    ...templateOptions,
+    ...(input.presentation?.url ? { url: input.presentation.url } : {}),
+    ...(input.presentation?.image_url ? { image: input.presentation.image_url } : {}),
+    ...(input.presentation?.image_alt ? { imageAlt: input.presentation.image_alt } : {}),
+    ...(input.presentation?.actions ? {
+      actions: input.presentation.actions.map((action) => ({
+        id: action.id,
+        label: action.label,
+        ...(action.url ? { url: action.url } : {}),
+        ...(action.icon_url ? { iconUrl: action.icon_url } : {})
+      }))
+    } : {})
+  };
   const deliveryOptions = {
     ...options,
     ...(deliveryDryRunRequested(input) ? { dry_run: true } : {})

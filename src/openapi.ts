@@ -48,6 +48,30 @@ export const openApiSpec = {
           },
           subject: { type: "string" },
           body: { type: "string" },
+          presentation: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              url: { type: "string", maxLength: 2048 },
+              image_url: { type: "string", maxLength: 2048 },
+              image_alt: { type: "string", maxLength: 200 },
+              actions: {
+                type: "array",
+                maxItems: 3,
+                items: {
+                  type: "object",
+                  required: ["id", "label"],
+                  additionalProperties: false,
+                  properties: {
+                    id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$", maxLength: 64 },
+                    label: { type: "string", maxLength: 80 },
+                    url: { type: "string", maxLength: 2048 },
+                    icon_url: { type: "string", maxLength: 2048 }
+                  }
+                }
+              }
+            }
+          },
           parameters: { type: "object", additionalProperties: true },
           message: {
             type: "object",

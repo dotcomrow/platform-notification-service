@@ -15,6 +15,20 @@ export type NotificationRecipientHint = {
   data?: JsonRecord;
 };
 
+export type NotificationPresentationAction = {
+  id: string;
+  label: string;
+  url?: string;
+  icon_url?: string;
+};
+
+export type NotificationPresentation = {
+  url?: string;
+  image_url?: string;
+  image_alt?: string;
+  actions?: NotificationPresentationAction[];
+};
+
 export type NotificationRequestInput = {
   event_key: string;
   source: string;
@@ -31,6 +45,7 @@ export type NotificationRequestInput = {
   recipients: NotificationRecipientHint[];
   subject?: string;
   body?: string;
+  presentation?: NotificationPresentation;
   parameters: JsonRecord;
   message?: RenderedNotificationMessage;
   data: JsonRecord;

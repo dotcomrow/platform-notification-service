@@ -21,6 +21,30 @@ const severitySchema = z.enum(["debug", "info", "success", "warning", "error", "
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]).default("normal");
 
 const jsonRecordSchema = z.record(z.string(), z.unknown()).default({});
+const notificationActionSchema = z.object({
+  id: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  label: z.string().trim().min(1).max(80),
+  url: z.string().trim().min(1).max(2048).optional(),
+  icon_url: z.string().trim().min(1).max(2048).optional()
+}).strict();
+const notificationPresentationSchema = z.object({
+  url: z.string().trim().min(1).max(2048).optional(),
+  image_url: z.string().trim().min(1).max(2048).optional(),
+  image_alt: z.string().trim().max(200).optional(),
+  actions: z.array(notificationActionSchema).max(3).superRefine((actions, ctx) => {
+    const seen = new Set<string>();
+    actions.forEach((action, index) => {
+      if (seen.has(action.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate notification action id: ${action.id}`,
+          path: [index, "id"]
+        });
+      }
+      seen.add(action.id);
+    });
+  }).optional()
+}).strict();
 
 const recipientHintSchema = z.object({
   type: z.enum(["user", "role", "group", "organization", "app", "browser_subscription", "email", "phone", "topic", "webhook"]),
@@ -55,6 +79,7 @@ const notificationRequestSchema = z.object({
   recipients: z.array(recipientHintSchema).default([]),
   subject: z.string().trim().min(1).optional(),
   body: z.string().trim().min(1).optional(),
+  presentation: notificationPresentationSchema.optional(),
   parameters: jsonRecordSchema,
   data: jsonRecordSchema,
   metadata: jsonRecordSchema,
