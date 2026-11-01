@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  browserPushAppAllowed,
+  browserPushOriginAllowed,
   inheritedBrowserPushRoutingPatch,
   persistedBrowserPushDeviceTarget,
+  resolveBrowserPushAllowedOrigins,
   selectBrowserPushCandidates,
 } from "../dist/notifications/browser-push-routing.js";
 
@@ -55,4 +58,32 @@ test("a new subscription does not become the current or favorite target", () => 
     browser_push_device_target: "favorite_device",
     is_notification_target: false,
   });
+});
+
+test("app configuration scopes delivery to the internal application", () => {
+  const allowedOrigins = resolveBrowserPushAllowedOrigins(
+    ["https://internal.suncoast.systems", "https://internal-preview.suncoast.systems"],
+    ["https://internal.suncoast.systems/admin/notifications"],
+  );
+  assert.deepEqual(allowedOrigins, [
+    "https://internal.suncoast.systems",
+    "https://internal-preview.suncoast.systems",
+  ]);
+  assert.equal(browserPushOriginAllowed("https://internal.suncoast.systems", allowedOrigins), true);
+  assert.equal(browserPushOriginAllowed("https://www-preview.suncoast.systems", allowedOrigins), false);
+  assert.equal(browserPushOriginAllowed(undefined, allowedOrigins), false);
+  assert.equal(browserPushAppAllowed("internal-app", "internal-app", undefined, allowedOrigins), true);
+  assert.equal(browserPushAppAllowed("external-app", "internal-app", "https://internal.suncoast.systems", allowedOrigins), false);
+});
+
+test("backend requests without a page URL remain scoped to the configured app", () => {
+  const allowedOrigins = resolveBrowserPushAllowedOrigins(
+    ["https://internal.suncoast.systems", "https://internal-preview.suncoast.systems"],
+    [],
+  );
+  assert.deepEqual(allowedOrigins, [
+    "https://internal.suncoast.systems",
+    "https://internal-preview.suncoast.systems",
+  ]);
+  assert.equal(browserPushOriginAllowed("https://external.suncoast.systems", allowedOrigins), false);
 });

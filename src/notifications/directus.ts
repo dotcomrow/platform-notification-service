@@ -5,10 +5,12 @@ import { asBoolean, asRecord, asString, JsonRecord, redactJsonRecord, truncate }
 import { requestEmailValidation } from "./email-validation.js";
 import { setCrmCommunicationPreference } from "./communication-preferences.js";
 import {
+  browserPushAppAllowed,
   BrowserPushDeviceTarget,
   inheritedBrowserPushRoutingPatch,
   normalizeBrowserPushDeviceTarget,
   persistedBrowserPushDeviceTarget,
+  resolveBrowserPushAllowedOrigins,
   selectBrowserPushCandidates,
 } from "./browser-push-routing.js";
 import {
@@ -593,7 +595,7 @@ export async function enrichNotificationRequest(input: NotificationRequestInput)
   };
 
   const renderedInput = await renderNotificationMessage(normalizedInput, context);
-  const browserResolvedInput = await resolveBrowserPushRecipients(renderedInput);
+  const browserResolvedInput = await resolveBrowserPushRecipients(renderedInput, context);
   return {
     input: await suppressUnvalidatedEmailDeliveries(browserResolvedInput),
     context
@@ -737,7 +739,9 @@ async function listActiveBrowserSubscriptionsForFilter(
 
 async function resolveBrowserPushRecipient(
   input: NotificationRequestInput,
-  recipient: NotificationRecipientHint
+  recipient: NotificationRecipientHint,
+  allowedOrigins: string[],
+  appId: string,
 ): Promise<NotificationRecipientHint[]> {
   if (!recipientWantsBrowserPush(input, recipient)) {
     return [recipient];
@@ -747,6 +751,12 @@ async function resolveBrowserPushRecipient(
     if (!subscriptionId) return [];
     const subscription = await findBrowserSubscriptionById(subscriptionId);
     if (!subscription?.id || subscription.status !== "active") return [];
+    if (!browserPushAppAllowed(
+      idFromRelation(subscription.app_id),
+      appId,
+      asRecord(subscription.capabilities_json)?.origin,
+      allowedOrigins,
+    )) return [];
     if (input.priority !== "high" && input.priority !== "urgent" && subscription.routine_notifications_enabled === false) {
       return [];
     }
@@ -766,6 +776,14 @@ async function resolveBrowserPushRecipient(
   if (allCandidates.length === 0 && userId) {
     allCandidates = await listActiveBrowserSubscriptionsForFilter("user_id", userId);
   }
+  allCandidates = allCandidates.filter((candidate) =>
+    browserPushAppAllowed(
+      idFromRelation(candidate.app_id),
+      appId,
+      asRecord(candidate.capabilities_json)?.origin,
+      allowedOrigins,
+    )
+  );
   const activeEligibleCandidates = allCandidates.filter((candidate) =>
     candidate.permission === "granted" && Boolean(candidate.endpoint_hash)
   );
@@ -821,14 +839,27 @@ async function resolveBrowserPushRecipient(
   return [browserSubscriptionRecipient(input, recipient, subscription)];
 }
 
-async function resolveBrowserPushRecipients(input: NotificationRequestInput): Promise<NotificationRequestInput> {
+async function resolveBrowserPushRecipients(
+  input: NotificationRequestInput,
+  context: NotificationContext,
+): Promise<NotificationRequestInput> {
   if (!input.channels.includes("browser_push") && !input.recipients.some((recipient) => recipient.channels?.includes("browser_push"))) {
     return input;
   }
+  const allowedOrigins = resolveBrowserPushAllowedOrigins(
+    [context.app?.production_url, context.app?.preview_url],
+    [
+      input.data.sent_from_url,
+      input.message?.data?.sent_from_url,
+      input.parameters.sent_from_url,
+      input.metadata.sent_from_url,
+    ],
+  );
   const recipients: NotificationRecipientHint[] = [];
+  const appId = asString(context.app?.id) || asString(input.app_id);
   for (const recipient of input.recipients) {
     const channels = recipientChannels(input, recipient) as NotificationChannel[];
-    const resolved = await resolveBrowserPushRecipient(input, recipient);
+    const resolved = await resolveBrowserPushRecipient(input, recipient, allowedOrigins, appId);
     if (resolved.length === 0) {
       continue;
     }

@@ -12,6 +12,44 @@ export type BrowserPushRoutingPersistencePatch = {
   is_notification_target: boolean;
 };
 
+export function normalizeBrowserPushOrigin(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+export function resolveBrowserPushAllowedOrigins(
+  appUrls: unknown[],
+  requestUrls: unknown[],
+): string[] {
+  const appOrigins = [...new Set(appUrls.map(normalizeBrowserPushOrigin).filter(Boolean))];
+  if (appOrigins.length > 0) return appOrigins;
+  return [...new Set(requestUrls.map(normalizeBrowserPushOrigin).filter(Boolean))];
+}
+
+export function browserPushOriginAllowed(candidateOrigin: unknown, allowedOrigins: string[]): boolean {
+  if (allowedOrigins.length === 0) return true;
+  const normalizedCandidateOrigin = normalizeBrowserPushOrigin(candidateOrigin);
+  return Boolean(normalizedCandidateOrigin && allowedOrigins.includes(normalizedCandidateOrigin));
+}
+
+export function browserPushAppAllowed(
+  candidateAppId: unknown,
+  expectedAppId: unknown,
+  candidateOrigin: unknown,
+  allowedOrigins: string[],
+): boolean {
+  const normalizedCandidateAppId = typeof candidateAppId === "string" ? candidateAppId.trim() : "";
+  const normalizedExpectedAppId = typeof expectedAppId === "string" ? expectedAppId.trim() : "";
+  if (normalizedExpectedAppId && normalizedCandidateAppId) {
+    return normalizedCandidateAppId === normalizedExpectedAppId;
+  }
+  return browserPushOriginAllowed(candidateOrigin, allowedOrigins);
+}
+
 export function normalizeBrowserPushDeviceTarget(value: unknown): BrowserPushDeviceTarget | null {
   return value === "current_device" || value === "favorite_device" || value === "all_devices"
     ? value
