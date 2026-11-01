@@ -43,6 +43,7 @@ import {
   PlatformApp,
   PlatformOrganization
 } from "./types.js";
+import { browserSubscriptionLifecycleMetadata } from "./browser-subscription-lifecycle.js";
 
 type DirectusListMeta = {
   filter_count?: number | string;
@@ -1511,17 +1512,17 @@ async function patchBrowserSubscription(
 
 function browserSubscriptionLifecyclePayload(
   input: BrowserPushSubscriptionLifecyclePatchInput,
+  existingMetadata: JsonRecord | null | undefined,
   now = new Date().toISOString()
 ): Record<string, unknown> {
   return {
     status: input.status,
-    metadata_json: redactJsonRecord({
-      ...(input.metadata ?? {}),
-      lifecycle_reason: input.reason || input.status,
-      lifecycle_message: input.message || undefined,
-      lifecycle_provider_status_code: input.provider_status_code ?? undefined,
-      lifecycle_updated_at: now
-    })
+    metadata_json: redactJsonRecord(browserSubscriptionLifecycleMetadata(
+      existingMetadata,
+      input.metadata,
+      input,
+      now
+    ))
   };
 }
 
@@ -1529,7 +1530,11 @@ export async function patchBrowserPushSubscriptionLifecycle(
   id: string,
   input: BrowserPushSubscriptionLifecyclePatchInput
 ): Promise<BrowserPushSubscriptionRecord> {
-  const patched = await patchBrowserSubscription(id, browserSubscriptionLifecyclePayload(input));
+  const existing = await findBrowserSubscriptionById(id);
+  const patched = await patchBrowserSubscription(id, browserSubscriptionLifecyclePayload(
+    input,
+    existing?.metadata_json
+  ));
   if (!patched?.id) {
     throw new Error("Directus did not return a browser subscription lifecycle record.");
   }
