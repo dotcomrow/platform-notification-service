@@ -57,6 +57,8 @@ import {
   NotificationChannel,
   NotificationDeliveryAttemptRecord,
   NotificationRecipientHint,
+  BrowserPushSubscriptionInput,
+  BrowserPushSubscriptionRecord,
   NotificationRequestInput,
   NotificationRequestRecord
 } from "./notifications/types.js";
@@ -77,6 +79,36 @@ app.use(rateLimit({
     || req.path === "/openapi.json"
     || req.path.startsWith("/internal/")
 }));
+
+function browserSubscriptionResponse(
+  subscription: BrowserPushSubscriptionRecord,
+  input: BrowserPushSubscriptionInput,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const notificationLink = browserSubscriptionNotificationLink(subscription);
+  return {
+    ok: true,
+    browser_subscription_id: subscription.id || null,
+    browser_installation_id: subscription.browser_installation_id || input.browser_installation_id || null,
+    status: subscription.status,
+    permission: subscription.permission || input.permission,
+    routine_notifications_enabled: subscription.routine_notifications_enabled !== false,
+    fallback_channels: subscription.fallback_channels_json || input.fallback_channels,
+    email_validation_id: subscription.email_validation_id || null,
+    email_validation_status: subscription.email_validation_status || null,
+    email_validation_checked_at: subscription.email_validation_checked_at || null,
+    email_validation_error: subscription.email_validation_error || null,
+    notification_link: notificationLink,
+    notification_link_persisted: Boolean(
+      notificationLink &&
+      notificationLink.persistent === browserSubscriptionInputPersistent(input) &&
+      asString(notificationLink.display_name) === asString(browserSubscriptionInputNotificationLink(input)?.display_name)
+    ),
+    last_seen_at: subscription.last_seen_at || null,
+    date_updated: subscription.date_updated || null,
+    ...extra
+  };
+}
 
 async function runEmailValidationEventListener(): Promise<void> {
   if (!config.kafkaEnabled) {
@@ -695,25 +727,52 @@ app.post("/internal/browser-subscriptions", async (req, res, next) => {
     await enforceInternalAuth(req);
     const input = parseBrowserSubscription(req.body);
     const subscription = await upsertBrowserPushSubscription(input);
-    const notificationLink = browserSubscriptionNotificationLink(subscription);
-    res.status(200).json({
-      ok: true,
-      browser_subscription_id: subscription.id || null,
-      status: subscription.status,
-      permission: subscription.permission || input.permission,
-      routine_notifications_enabled: subscription.routine_notifications_enabled !== false,
-      fallback_channels: subscription.fallback_channels_json || input.fallback_channels,
-      email_validation_id: subscription.email_validation_id || null,
-      email_validation_status: subscription.email_validation_status || null,
-      email_validation_checked_at: subscription.email_validation_checked_at || null,
-      email_validation_error: subscription.email_validation_error || null,
-      notification_link: notificationLink,
-      notification_link_persisted: Boolean(
-        notificationLink &&
-        notificationLink.persistent === browserSubscriptionInputPersistent(input) &&
-        asString(notificationLink.display_name) === asString(browserSubscriptionInputNotificationLink(input)?.display_name)
-      )
+    res.status(200).json(browserSubscriptionResponse(subscription, input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/internal/browser-subscriptions/reconcile", async (req, res, next) => {
+  try {
+    await enforceInternalAuth(req);
+    const input = parseBrowserSubscription(req.body);
+    if (
+      !input.browser_subscription_id
+      || !input.browser_installation_id
+      || !input.browser_subscription_client_secret
+    ) {
+      throw Object.assign(new Error("Browser subscription identity and ownership proof are required."), { status: 403 });
+    }
+    const current = await resolveBrowserPushSubscriptionOwnership({
+      browser_subscription_id: input.browser_subscription_id,
+      browser_installation_id: input.browser_installation_id,
+      browser_subscription_client_secret: input.browser_subscription_client_secret,
+      routine_notifications_enabled: false
     });
+    if (current.status === "disabled" || current.status === "expired") {
+      res.status(200).json(browserSubscriptionResponse(current, input, {
+        renewal_required: true,
+        recreation_required: false
+      }));
+      return;
+    }
+    if (
+      current.status !== "active"
+      || current.permission !== "granted"
+      || !browserSubscriptionNotificationLink(current)
+    ) {
+      res.status(200).json(browserSubscriptionResponse(current, input, {
+        renewal_required: false,
+        recreation_required: true
+      }));
+      return;
+    }
+    const subscription = await upsertBrowserPushSubscription(input);
+    res.status(200).json(browserSubscriptionResponse(subscription, input, {
+      renewal_required: false,
+      recreation_required: false
+    }));
   } catch (error) {
     next(error);
   }

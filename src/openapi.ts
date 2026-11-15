@@ -482,6 +482,8 @@ export const openApiSpec = {
           status: { type: "string" },
           permission: { type: "string" },
           routine_notifications_enabled: { type: "boolean" },
+          renewal_required: { type: "boolean" },
+          recreation_required: { type: "boolean" },
           fallback_channels: { type: "array", items: { type: "string" } },
           email_validation_id: { type: "string", format: "uuid", nullable: true },
           email_validation_status: { type: "string", enum: ["pending", "validated", "failed", "expired"], nullable: true },
@@ -624,6 +626,30 @@ export const openApiSpec = {
         responses: {
           "200": {
             description: "Browser push subscription was stored.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/browser-subscriptions/reconcile": {
+      post: {
+        operationId: "reconcileBrowserSubscription",
+        summary: "Validate ownership and refresh an existing browser Web Push subscription in one operation.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/BrowserPushSubscriptionRequest" }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Browser push subscription ownership and liveness were reconciled.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/BrowserPushSubscriptionResponse" }
