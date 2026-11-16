@@ -17,12 +17,13 @@ function safeEqual(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function allowsBrowserPushTrustedTokens(req: Request): boolean {
+export function allowsBrowserPushTrustedTokens(req: Pick<Request, "method" | "path">): boolean {
   if (req.method.toUpperCase() !== "POST") {
     return false;
   }
   return req.path === "/internal/browser-push/public-key"
     || req.path === "/internal/browser-subscriptions"
+    || req.path === "/internal/browser-subscriptions/reconcile"
     || req.path === "/internal/browser-subscriptions/delete"
     || req.path === "/internal/browser-subscriptions/resolve";
 }
